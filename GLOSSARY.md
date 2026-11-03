@@ -21,7 +21,7 @@ A named intermediate state on the way to the finish line, such as the first dest
 _Avoid_: Checkpoint, stage, phase
 
 **Start command**:
-The single terminal command the human types to begin a run, after exiting the tutorial.
+The one terminal line the human types to begin a run, after exiting the tutorial. On a fresh save it is submitted twice, because the first submission only downloads; that still counts as typing it once. After a page reload, a single submission is enough.
 _Avoid_: Launcher, entry point
 
 **Target version**:
