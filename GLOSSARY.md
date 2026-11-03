@@ -27,6 +27,20 @@ _Avoid_: Launcher, entry point
 **Target version**:
 The Bitburner build the run is made for: the web release v3.0.1.
 
+## The route
+
+**BitNode order**:
+The fixed sequence of the 45 BitNode destructions that every run follows from the fresh save to the finish line.
+_Avoid_: Route, path, BN progression
+
+**Finish**:
+The way a single BitNode is destroyed: the **hacking finish** (The Red Pill, then hacking the World Daemon) or the **Black Ops finish** (completing every Bladeburner Black Operation).
+_Avoid_: Win condition, ending, kill
+
+**Enabler**:
+A Source-File level whose effect speeds up many later destructions, beyond adding small multipliers. SF4.3 is the clearest example.
+_Avoid_: Unlock, key SF
+
 ## Rules
 
 **Exploit**:
@@ -36,6 +50,9 @@ _Avoid_: Cheat, hack
 **UI automation**:
 A script driving the game's interface through `document` or `window`, paying the 25 GB RAM cost per reference. Allowed in a run.
 _Avoid_: DOM hacking, clicker
+
+**BitNode options**:
+The game's own settings chosen when entering a BitNode, such as lowering an active Source-File level. Allowed in a run: they are not an exploit.
 
 **Human action**:
 Anything the person does during a run. A run allows only: start a new game, exit the tutorial, type the start command, and retype the start command after a page reload.
