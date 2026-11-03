@@ -43,12 +43,26 @@ _Avoid_: Unlock, key SF
 
 ## Rules
 
+**Category**:
+A named set of rules a run is timed under. Splits are compared only within one category. There are two:
+- **Open** (the default): faked trusted clicks and script reloads are allowed.
+- **Strict**: neither is allowed.
+_Avoid_: Mode, variant, ruleset
+
+**Faked trusted click**:
+A script's click that gets past a guard the game puts on scripted input, which accepts only real clicks. Allowed only in Open.
+_Avoid_: Trusted click, isTrusted bypass
+
+**Script reload**:
+The run reloading the page by itself, for example to save-scum the casino. Allowed only in Open. It is not the page reload of the human-action list, which happens to a run rather than being caused by it.
+_Avoid_: Forced reload, refresh
+
 **Exploit**:
-Anything the game itself records as an exploit (e.g. editing the save, time compression, prototype tampering, dodging the DOM RAM cost). A run may not use any.
+Anything in a category the game names as an exploit, however it is done and whether or not the game detects it (e.g. editing the save, time compression, prototype tampering, dodging the DOM RAM cost). A run may not use any, whatever its category.
 _Avoid_: Cheat, hack
 
 **UI automation**:
-A script driving the game's interface through `document` or `window`, paying the 25 GB RAM cost per reference. Allowed in a run.
+A script driving the game's interface through `document` or `window`. The script's own source must name each of the two it uses, so it pays the game's 25 GB RAM cost for each. When that code runs, even after the script has ended, doesn't matter. Allowed in a run.
 _Avoid_: DOM hacking, clicker
 
 **BitNode options**:
