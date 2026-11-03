@@ -63,6 +63,22 @@ Anything the person does during a run. A run allows only: start a new game, exit
 A save file taken when a milestone is reached, used only in development as a starting point; never part of a run.
 _Avoid_: Checkpoint, snapshot
 
+**Lab save**:
+A save made only to measure the game's behaviour, which may be edited and may carry the game's exploit flag. It is never a milestone save, never a starting point for a scenario test, and never part of a run.
+_Avoid_: Test save, debug save
+
+**Release**:
+The latest build that passed every check required before runs may use it. The start command always downloads the current release.
+_Avoid_: Deploy, version
+
+**Smoke test**:
+A short automated check, from a fresh save, that the start command gets a run going and that retyping it after a page reload resumes the run. A build becomes a release only if it passes.
+_Avoid_: Sanity check, end-to-end test
+
+**Scenario test**:
+An automated test that loads a milestone save, types the start command once, and checks that the run reaches the next milestone.
+_Avoid_: Integration test, end-to-end test
+
 **Split**:
 The real time elapsed from the start of a run until a milestone is reached.
 _Avoid_: Lap, segment time
