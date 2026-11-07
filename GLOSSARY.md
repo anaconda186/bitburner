@@ -142,3 +142,7 @@ _Avoid_: Integration test, end-to-end test
 **Split**:
 The real time elapsed from the start of a run until a milestone is reached.
 _Avoid_: Lap, segment time
+
+**Reload loss**:
+The real time a page reload costs a run: the rollback to the last autosave plus the time until the run is going again, including the human's retype. A split's gross time includes it; its net time subtracts it.
+_Avoid_: Downtime, penalty
