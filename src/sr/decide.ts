@@ -93,11 +93,16 @@ function pickHost(free: Readonly<Record<string, number>>, cost: number): string 
   return best;
 }
 
-/** Probes with no reading yet, or one older than their maxAgeMs, and none on the way. */
+/**
+ * Probes with no reading yet, or one older than their maxAgeMs, and none on
+ * the way; a probe with `onlyIf` only while that holds.
+ */
 function staleProbes(s: Snapshot): ProbeName[] {
   return (Object.keys(PROBES) as ProbeName[]).filter((name) => {
     if (s.probesInFlight.includes(name)) return false;
+    const spec = PROBES[name];
+    if (spec.onlyIf !== undefined && !spec.onlyIf(s.probes)) return false;
     const reading = s.probes[name];
-    return reading === undefined || s.nowMs - reading.atMs >= PROBES[name].maxAgeMs;
+    return reading === undefined || s.nowMs - reading.atMs >= spec.maxAgeMs;
   });
 }

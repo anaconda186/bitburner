@@ -58,7 +58,7 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 
 ## State file (set by #44)
 
-- **`sr/state.json` on home** holds only what the game forgets: `v, category, startedAt, buildSha, updatedAt, milestone, splits, reloads, builds`, in that order, then any newer fields.
+- **`sr/state.json` on home** holds only what the game forgets: `v, category, startedAt, buildSha, updatedAt, milestone, splits, reloads, builds`, then `installs, resetAt` (#49), in that order, then any newer fields.
 - **Writers:**
   - `boot.js` creates the file only when it is missing, after the fetch. `startedAt` and `updatedAt` are set to the moment that boot started, `buildSha` to the manifest's `source`, the category to the argument or `open`, and the lists start empty.
   - An existing file is never written by boot. A different `--category` is ignored with `WARN boot: this run is category <c>; --category <x> ignored`.
@@ -85,13 +85,35 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 
 - **The order** is one table, `BITNODE_ORDER` in `src/sr/order.ts`: 45 `{ bn, level, finish }` entries, `finish` being `"hacking"` or `"blackops"`. Change the order only there.
 - **Position** (`position(route)` in `order.ts`) follows from `RouteFacts = { currentNode, ownedSF }` alone. It gives `playing` (the current BitNode at the level above the one owned), its `index` in the order (-1 if it's not in it), `onRoute` (true when `playing` is the first destruction not yet owned), `next` (the BitNode to enter on destroying this one, or null when that reaches the finish line) and `finished`. Nothing about the position is stored.
-- **The `route` probe** (`sr/h/route.js`, 2.6 GB, `maxAgeMs` 60 s) reads `getResetInfo` and returns `RouteFacts`, with `ownedSF` as a plain object. The conductor can't afford `getResetInfo` itself. So `snapshot.probes.route` is the snapshot's route; until it lands, nothing that needs the position is known.
+- **The `route` probe** (`sr/h/route.js`, 2.6 GB, `maxAgeMs` 60 s) reads `getResetInfo` and returns `RouteFacts` plus `lastAugReset` and `lastNodeReset` (#49), with `ownedSF` as a plain object. The conductor can't afford `getResetInfo` itself. So `snapshot.probes.route` is the snapshot's route; until it lands, nothing that needs the position is known.
 - **Milestones** (`src/sr/milestones.ts`): `{ name, scope?, test(snapshot, route) }`.
   - The spine (`SPINE`) is `bn<N>.<L>`, one per entry, and has no scope. Its test is SF N ≥ L, so it passes just after the destruction, in the next BitNode.
   - Plans make their extras with `scoped(bn, level | undefined, suffix, test)`. That gives `bn<N>.<L>:<suffix>`, or `bn<N>.<suffix>` for any level of BitNode N. An extra is checked only while `position(route).playing` matches its scope, so a skipped extra is just absent.
   - Add a plan's list to `MILESTONES = registry(SPINE, ...)`. `registry` throws on a name used twice.
   - `milestonesReached(milestones, snapshot, reached)` returns the due names in registry order. Each test is checked on its own.
-- **Recording:** after `carryOut`, the conductor calls `milestonesReached(MILESTONES, snapshot, reachedMilestones(record.state))`. For each name it calls `record.update((s) => recordMilestone(s, name, nowMs))` and prints `conductor: milestone <name>`. `recordMilestone` (in `state.ts`) sets `milestone` and appends a split `{ milestone, ms }`, with `ms` the time since `startedAt`. `reachedMilestones` reads the names back from the splits plus `milestone`. That is how a milestone counts once, across reloads too, since the state file rolls back with the save. #49 adds the split's other fields and the real terminal line.
+- **Recording:** after `carryOut`, the conductor calls `milestonesReached(MILESTONES, snapshot, reachedMilestones(record.state))`. For each name it calls `record.update((s) => recordMilestone(s, name, nowMs, splitStats(snapshot)))` and prints `splitLine(record.state)`. `recordMilestone` (in `state.ts`) sets `milestone` and appends a split (next section). `reachedMilestones` reads the names back from the splits plus `milestone`. That is how a milestone counts once, across reloads too, since the state file rolls back with the save.
+
+## Splits, reloads and builds (set by #49)
+
+- **A split** (`Split` in `state.ts`) is `{ milestone, ms, build, lostMs, installs, stats: { hack, money, M, homeRam, sleeves } }`:
+  - `ms` is gross, since `startedAt`.
+  - `build` is the build running (`currentBuild`), `lostMs` the reload loss so far and `installs` the installs so far.
+  - Net = `ms - lostMs` (`splitTime`; `runTime(state, nowMs)` for the run as a whole).
+- **Stats come from probes, never from conductor NS calls** (`splitStats(snapshot)` in `src/sr/splits.ts`). A stat is null until a probe has read it.
+  - The `stats` probe (`sr/h/stats.js`, 2.15 GB, 30 s) gives `hack` (hacking level), `money`, `M` and `homeRam`. `M` is `getPlayer().mults.hacking`, without the BitNode's HackingLevelMultiplier, because reading that needs SF5.
+  - The `sleeves` probe (`sr/h/sleeves.js`, 5.6 GB, 5 min) gives `{ count }`. It is launched only where `sleevesPossible(route)` holds (BN10, or SF10 owned), through the new optional `onlyIf(readings)` on a `ProbeSpec`. Elsewhere `sleeves` is 0.
+  - **Never write the identifier `hack` in conductor-reachable code.** It is charged like `ns.hack` (0.1 GB). The probe quotes the key (`"hack": ...`), and `splits.ts` builds the empty stats from strings.
+- **Terminal:**
+  - Each split prints `conductor: split <name> <gross> (+<delta from the previous split>)`. Once reloads have cost anything, it adds `, net <net>`.
+  - The format is `[<d>d ]H:MM:SS` (`formatDuration`).
+  - When a loop records milestones and `runFinished(state)` (every spine milestone reached), the conductor prints `finishSummary(state)`: two lines with gross, net, milestone count, reloads and their loss, installs and builds.
+- **Conductor start-up** (boot.js never writes an existing file, so the conductor does this):
+  1. Right after `openRunState`, it captures `start = { atMs, savedUpdatedAt }`. It reads the build from `manifest.json` on home (`buildOnHome`, a free `ns.read`) and calls `noteBuild`, which appends `{ sha, fromMs }` to `builds` only when the build differs from `currentBuild`.
+  2. Once the route probe's first reading lands, `accountStart(state, start, route)` runs once, before that loop's milestones:
+     - `resetAt` null means the run's first start: it just stores `lastAugReset`.
+     - A different `lastAugReset` means a reset, not a reload. `installs` goes up by one if `lastAugReset > lastNodeReset` (an install, not a BitNode entry). No reload record is written.
+     - The same `lastAugReset` means a page reload or a kill. One `{ atMs, gapMs }` is appended to `reloads`, where `gapMs = atMs - savedUpdatedAt`, the heartbeat the reload rolled back to. The conductor prints `conductor: reload; <gap> lost since the last save`.
+- **Why `installs` and `resetAt` are fields:** the game has no install count, and it can't tell a reload from a reset restart. Only reloads are reload loss.
 
 ## RAM budget (`tools/ram-budget.ts`)
 
