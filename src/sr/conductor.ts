@@ -11,6 +11,7 @@
 import type { NS } from "@ns";
 import { backoffMs } from "./backoff.ts";
 import { decide, type Action, type Snapshot } from "./decide.ts";
+import { openRunState } from "./run-state.ts";
 
 /** Time between iterations when nothing went wrong. */
 const TICK_MS = 1000;
@@ -30,6 +31,8 @@ function carryOut(_ns: NS, actions: readonly Action[]): void {
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
+  const record = openRunState(ns);
+  if (record === null) return;
   ns.tprint("conductor: up");
   let beats = 0;
   let lastTerminalBeat = Date.now();
@@ -38,6 +41,7 @@ export async function main(ns: NS): Promise<void> {
     try {
       const snapshot = takeSnapshot();
       carryOut(ns, decide(snapshot));
+      record.keep(snapshot.nowMs);
       beats++;
       ns.print(`heartbeat ${beats} at ${new Date(snapshot.nowMs).toISOString()}`);
       if (snapshot.nowMs - lastTerminalBeat >= TERMINAL_BEAT_MS) {
