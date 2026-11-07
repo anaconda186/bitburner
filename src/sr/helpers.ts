@@ -11,6 +11,8 @@
 //   - a long-lived worker (it keeps running and reports on its own port)
 //     goes in WORKERS.
 
+import type { RouteFacts } from "./order.ts";
+
 /** Where every helper lives on home. */
 export type HelperScript = `sr/h/${string}.js`;
 
@@ -28,13 +30,10 @@ export interface ProbeValues {
    * counts at once, even when home is too full for this probe to run again.
    */
   network: { readonly hosts: readonly string[] };
-  /**
-   * The stock market as far as starting the trader goes: the BitNode the
-   * player is in (`getResetInfo().currentNode`) and whether the TIX API, which
-   * every stock call needs, is owned. (#48 may read the BitNode in a probe of
-   * its own; the two can merge.)
-   */
-  market: { readonly currentNode: number; readonly hasTixApi: boolean };
+  /** The current BitNode and the owned Source-Files (#48): where the run is in the BitNode order. */
+  route: RouteFacts;
+  /** Whether the TIX API, which every stock call needs, is owned (#72: the BN8 trader waits for it). */
+  market: { readonly hasTixApi: boolean };
 }
 
 export type ProbeName = keyof ProbeValues;
@@ -48,7 +47,10 @@ export interface ProbeSpec {
 /** Probes take no argument: each fills one snapshot field, `snapshot.probes[name]`. */
 export const PROBES: { readonly [P in ProbeName]: ProbeSpec } = {
   network: { script: "sr/h/network.js", maxAgeMs: 10_000 },
-  // Changes only when TIX is bought or at a reset, which restarts the conductor.
+  // Changes only at a reset, which also restarts the conductor; refreshed
+  // once a minute so a failed reading is retried.
+  route: { script: "sr/h/route.js", maxAgeMs: 60_000 },
+  // Changes when TIX is bought (or at a reset, which restarts the conductor).
   market: { script: "sr/h/market.js", maxAgeMs: 30_000 },
 };
 

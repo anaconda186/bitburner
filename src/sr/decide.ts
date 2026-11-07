@@ -81,8 +81,9 @@ export function decide(snapshot: Snapshot): readonly Action[] {
  * The BN8 session plan (#73, #74) narrows this at its hooks.
  */
 export function traderWanted(s: Snapshot): boolean {
+  const route = s.probes.route;
   const market = s.probes.market;
-  return market?.ok === true && market.value.currentNode === 8 && market.value.hasTixApi;
+  return route?.ok === true && route.value.currentNode === 8 && market?.ok === true && market.value.hasTixApi;
 }
 
 /** A worker should be launched: it isn't running, and any backoff since its last failure is over. */

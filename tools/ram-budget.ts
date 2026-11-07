@@ -61,8 +61,12 @@ export const RAM_BUDGETS: BudgetTable = {
   "sr/conductor.js": { budget: 4, contexts: EVERYWHERE },
   // #47: the network probe helper. Base 1.6, scan 0.2.
   "sr/h/network.js": { budget: 1.8, contexts: EVERYWHERE },
-  // #72: the market probe. Base 1.6, getResetInfo 1, stock.hasTixApiAccess 0.05.
-  "sr/h/market.js": { budget: 2.65, contexts: EVERYWHERE },
+  // #48: the route probe (current BitNode, owned Source-Files). Base 1.6,
+  // getResetInfo 1.0, which the conductor can't afford.
+  "sr/h/route.js": { budget: 2.6, contexts: EVERYWHERE },
+  // #72: the market probe. Base 1.6, stock.hasTixApiAccess 0.05: 1.65, a
+  // hair over in the calculator's float sum (as is the trader's), hence 1.7.
+  "sr/h/market.js": { budget: 1.7, contexts: EVERYWHERE },
   // #72: the BN8 trader worker. Base 1.6; getSymbols, getAskPrice,
   // getBidPrice, getPosition, getMaxShares 2 each; buyStock, sellStock,
   // buyShort, sellShort, getForecast, getVolatility 2.5 each;

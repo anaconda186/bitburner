@@ -19,7 +19,9 @@ import { decide, type Action, type ProbeReading, type Snapshot, type WorkerView 
 import { awaitReply, isScriptDeath, launchHelper, pollReply, replyPorts, type Launched } from "./helper-calls.ts";
 import { readWorkerReport, type Json, type Reply } from "./helper-contract.ts";
 import { HELPER_SCRIPTS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName } from "./helpers.ts";
+import { MILESTONES, milestonesReached } from "./milestones.ts";
 import { openRunState } from "./run-state.ts";
+import { reachedMilestones, recordMilestone } from "./state.ts";
 import { afterLaunch, NO_WORKER, observeWorker, type WorkerBook } from "./workers.ts";
 
 /** Time between iterations when nothing went wrong. */
@@ -171,6 +173,10 @@ export async function main(ns: NS): Promise<void> {
       collectProbes(ns, m);
       const snapshot = takeSnapshot(ns, m);
       await carryOut(ns, m, decide(snapshot));
+      for (const name of milestonesReached(MILESTONES, snapshot, reachedMilestones(record.state))) {
+        record.update((state) => recordMilestone(state, name, snapshot.nowMs));
+        ns.tprint(`conductor: milestone ${name}`);
+      }
       record.keep(snapshot.nowMs);
       beats++;
       ns.print(`heartbeat ${beats} at ${new Date(snapshot.nowMs).toISOString()}`);

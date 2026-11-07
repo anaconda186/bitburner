@@ -7,6 +7,8 @@ import { STATE_FILE, parseState, stateWrite, type RunState, type Written } from 
 export type RunRecord = {
   /** The run's state as last kept. */
   readonly state: RunState;
+  /** Changes the state; the next `keep` writes it. */
+  update(change: (state: RunState) => RunState): void;
   /** Writes the file if the state changed or the heartbeat is due. */
   keep(nowMs: number): void;
 };
@@ -27,6 +29,9 @@ export function openRunState(ns: NS): RunRecord | null {
   return {
     get state() {
       return state;
+    },
+    update(change) {
+      state = change(state);
     },
     keep(nowMs) {
       const due = stateWrite(state, last, nowMs);
