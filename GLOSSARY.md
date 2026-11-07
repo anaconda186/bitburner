@@ -59,6 +59,34 @@ _Avoid_: Clicker, UI script
 The small script on home that keeps a run going by handing work to short-lived helper scripts.
 _Avoid_: Orchestrator, daemon
 
+**Money engine**:
+The script that decides, moment to moment, what the run's spare RAM is doing: earning money, earning hacking exp or sharing.
+_Avoid_: Batcher, hacking daemon
+
+**Fleet**:
+The cloud servers the run owns. An install deletes them all, so each reset buys its own.
+_Avoid_: Purchased servers, pservs
+
+**Target**:
+The server the money engine is currently stealing money from.
+_Avoid_: Victim, mark
+
+**Drain**:
+Hacking servers' starting money without growing it back, used before the run can afford anything better.
+_Avoid_: Early batching
+
+**Batch**:
+A hack, a grow and their weakens, timed to land together so the target ends up as it started.
+_Avoid_: Cycle, HWGW
+
+**Exp farm**:
+RAM spent on earning hacking exp rather than money.
+_Avoid_: Grinding
+
+**Final climb**:
+The stretch after the last install, from no exp up to the hacking level the BitNode's World Daemon requires.
+_Avoid_: Endgame, last push
+
 ## Rules
 
 **Category**:
