@@ -61,4 +61,14 @@ export const RAM_BUDGETS: BudgetTable = {
   "sr/conductor.js": { budget: 4, contexts: EVERYWHERE },
   // #47: the network probe helper. Base 1.6, scan 0.2.
   "sr/h/network.js": { budget: 1.8, contexts: EVERYWHERE },
+  // #72: the market probe. Base 1.6, getResetInfo 1, stock.hasTixApiAccess 0.05.
+  "sr/h/market.js": { budget: 2.65, contexts: EVERYWHERE },
+  // #72: the BN8 trader worker. Base 1.6; getSymbols, getAskPrice,
+  // getBidPrice, getPosition, getMaxShares 2 each; buyStock, sellStock,
+  // buyShort, sellShort, getForecast, getVolatility 2.5 each;
+  // getServerMoneyAvailable 0.1, has4SDataTixApi 0.05; nextUpdate 0. That is
+  // 26.75, which the calculator's float sum puts a hair over, hence 26.8.
+  // Only BN8 starts it, which the gate's presets price like any BitNode
+  // after the BN4 front (no Singularity here, so the context changes nothing).
+  "sr/h/trader.js": { budget: 26.8, contexts: ["SF4.3"] },
 };

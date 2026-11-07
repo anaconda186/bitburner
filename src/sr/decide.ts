@@ -6,8 +6,9 @@
 // conductor. Don't name things `run`, `kill`, `scan`, `share`, `hack`, or
 // `probe` (that is dnet.probe, 0.2 GB, which is why a ProbeLaunch calls its
 // probe `name`). `npm run ram-check` prices the real thing.
-import type { Json, Reply } from "./helper-contract.ts";
-import { PROBES, type HelperScript, type ProbeName, type ProbeValues } from "./helpers.ts";
+import { backoffMs } from "./backoff.ts";
+import type { Json, Reply, WorkerReport } from "./helper-contract.ts";
+import { PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName } from "./helpers.ts";
 
 /** The latest reply of one probe and when the conductor read it. */
 export type ProbeReading<T> = Reply<T> & { readonly atMs: number };
@@ -35,22 +36,72 @@ export type Snapshot = {
   readonly callRunning: boolean;
   /** The last action helper the conductor carried out, and how it went. */
   readonly lastCall?: { readonly script: HelperScript; readonly arg: Json; readonly atMs: number; readonly reply: Reply };
+  /**
+   * Each long-lived worker this conductor knows of. Absent means none has run
+   * since this conductor started (after a reload, nothing has).
+   */
+  readonly workers: { readonly [W in WorkerName]?: WorkerView };
+};
+
+/** A long-lived worker as the conductor sees it. */
+export type WorkerView = {
+  /** Its process is alive, whoever started it. */
+  readonly running: boolean;
+  /** Launches in a row that failed or died young; 0 once one has run a while. */
+  readonly failures: number;
+  /** When the last of those failures was seen. */
+  readonly lastFailAtMs?: number;
+  /** The latest report on its status port. */
+  readonly report?: WorkerReport;
 };
 
 /** Launch a probe on `host`; its reply lands in `snapshot.probes` on a later loop. */
 export type ProbeLaunch = { readonly kind: "probe"; readonly name: ProbeName; readonly host: string };
 /** Launch an action helper on `host` and await its reply before anything else. */
 export type HelperCall = { readonly kind: "call"; readonly script: HelperScript; readonly arg: Json; readonly host: string };
+/** Launch a long-lived worker on `host` and leave it running. */
+export type WorkerStart = { readonly kind: "start"; readonly worker: WorkerName; readonly arg: Json; readonly host: string };
 
 /** Something for the conductor to do. */
-export type Action = ProbeLaunch | HelperCall;
+export type Action = ProbeLaunch | HelperCall | WorkerStart;
 
 /** An action before it has a server: what the sub-deciders produce. */
-export type Want = Omit<ProbeLaunch, "host"> | Omit<HelperCall, "host">;
+export type Want = Omit<ProbeLaunch, "host"> | Omit<HelperCall, "host"> | Omit<WorkerStart, "host">;
 
 export function decide(snapshot: Snapshot): readonly Action[] {
   const wants: Want[] = staleProbes(snapshot).map((name) => ({ kind: "probe", name }));
+  if (traderWanted(snapshot) && startDue(snapshot.workers.trader, snapshot.nowMs)) {
+    wants.push({ kind: "start", worker: "trader", arg: null });
+  }
   return place(snapshot, wants);
+}
+
+/**
+ * The BN8 trader runs whenever the player is in BN8 and holds the TIX API.
+ * The BN8 session plan (#73, #74) narrows this at its hooks.
+ */
+export function traderWanted(s: Snapshot): boolean {
+  const market = s.probes.market;
+  return market?.ok === true && market.value.currentNode === 8 && market.value.hasTixApi;
+}
+
+/** A worker should be launched: it isn't running, and any backoff since its last failure is over. */
+function startDue(w: WorkerView | undefined, nowMs: number): boolean {
+  if (w === undefined) return true;
+  if (w.running) return false;
+  if (w.failures === 0 || w.lastFailAtMs === undefined) return true;
+  return nowMs - w.lastFailAtMs >= backoffMs(w.failures);
+}
+
+function scriptOf(want: Want): HelperScript {
+  switch (want.kind) {
+    case "probe":
+      return PROBES[want.name].script;
+    case "call":
+      return want.script;
+    case "start":
+      return WORKERS[want.worker].script;
+  }
 }
 
 /** Rounding slack for RAM sums (the game rounds RAM to 0.01 GB). */
@@ -70,7 +121,7 @@ export function place(snapshot: Snapshot, wants: readonly Want[]): Action[] {
   let callPlaced = snapshot.callRunning;
   for (const want of wants) {
     if (want.kind === "call" && callPlaced) continue;
-    const script = want.kind === "probe" ? PROBES[want.name].script : want.script;
+    const script = scriptOf(want);
     const cost = snapshot.helperRamGb[script] ?? 0;
     if (!(cost > 0)) continue;
     const host = pickHost(free, cost);
