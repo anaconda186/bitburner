@@ -49,4 +49,7 @@ export const RAM_BUDGETS: BudgetTable = {
   // It must fit an 8 GB home." Started by the start command, autoexec, reset
   // callbacks, the driver and the casino, so it runs everywhere.
   "boot.js": { budget: 4, contexts: EVERYWHERE },
+  // #43: the heartbeat conductor boot.js spawns, measured at 1.60 GB. boot.js
+  // plus the conductor must fit an 8 GB home, and it runs everywhere.
+  "sr/conductor.js": { budget: 4, contexts: EVERYWHERE },
 };
