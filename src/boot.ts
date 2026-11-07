@@ -2,13 +2,18 @@
 // conductor. Every way into a run goes through here (the start command,
 // autoexec, reset callbacks, the driver's atExit timer).
 //
-//   1. Fetch manifest.json from the `release` branch (the one mutable URL).
-//   2. Hash every listed file already on home; fetch only those whose sha256
+//   1. If the conductor or an earlier boot.js is running on home, print "run
+//      already live" and exit, touching nothing. Then read the one argument,
+//      `--category <name>`.
+//   2. Fetch manifest.json from the `release` branch (the one mutable URL).
+//   3. Hash every listed file already on home; fetch only those whose sha256
 //      differs from the manifest's, from URLs pinned to the manifest's release
-//      commit, so one boot always gets one consistent build.
-//   3. Retry the manifest and any failed file forever, printing each failure,
-//      with backoff capped at about 30 s: no human may help mid-run.
-//   4. Once every file is present, spawn the conductor (temporary, spawnDelay
+//      commit, so one boot always gets one consistent build. Retry the
+//      manifest and any failed file forever, printing each failure, with
+//      backoff capped at about 30 s: no human may help mid-run.
+//   4. Create sr/state.json if it is missing (category, start time, build).
+//      An existing one is never written here: only the conductor writes it.
+//   5. Once every file is present, spawn the conductor (temporary, spawnDelay
 //      0, so this script's RAM is freed before the conductor starts). boot.js
 //      itself is the one script started non-temporary, by the terminal.
 //
@@ -97,6 +102,85 @@ export async function sha256Hex(body: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+export const BOOT = "boot.js";
+
+/**
+ * Whether a run is already live, from what is running on home: the conductor,
+ * or a boot started before this one (`selfPid`). PIDs only grow between
+ * resets, so of two boots started together the later one stands down and the
+ * earlier one carries on.
+ */
+export function runIsLive(processes: readonly { filename: string; pid: number }[], selfPid: number): boolean {
+  return processes.some((p) => p.filename === CONDUCTOR || (p.filename === BOOT && p.pid < selfPid));
+}
+
+/** A copy of sr/state.ts's CATEGORIES, since this file may import nothing. */
+const CATEGORIES = ["open", "strict"];
+const CATEGORY_LIST = `(${CATEGORIES.join(", ")})`;
+const USAGE = `usage: run boot.js [--category ${CATEGORIES.join("|")}]`;
+
+export type BootArgs = { ok: true; category: string | undefined } | { ok: false; error: string };
+
+/** Reads `--category <name>` or `--category=<name>`; anything else is refused. */
+export function parseBootArgs(args: readonly (string | number | boolean)[]): BootArgs {
+  let category: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = String(args[i]);
+    let value: string | undefined;
+    if (arg === "--category") value = args[++i] === undefined ? undefined : String(args[i]);
+    else if (arg.startsWith("--category=")) value = arg.slice("--category=".length);
+    else return { ok: false, error: `boot: unknown argument ${arg}; ${USAGE}` };
+    if (value === undefined || value === "") return { ok: false, error: `boot: --category needs a value ${CATEGORY_LIST}` };
+    if (!CATEGORIES.includes(value)) return { ok: false, error: `boot: unknown category ${value} ${CATEGORY_LIST}` };
+    category = value;
+  }
+  return { ok: true, category };
+}
+
+/** sr/state.ts's STATE_FILE and STATE_VERSION, copied: this file may import nothing. */
+export const STATE_FILE = "sr/state.json";
+const STATE_VERSION = 1;
+
+/**
+ * What boot does with the state file (`existing` is its text, `""` when it is
+ * missing). A missing file is created, started at `nowMs`, in the category
+ * asked for or open. An existing one is never touched: a different category
+ * asked for is ignored with a warning, and a file boot can't read is left for
+ * the conductor, which knows the full schema rules, to report.
+ */
+export function stateOnBoot(
+  existing: string,
+  asked: string | undefined,
+  buildSha: string,
+  nowMs: number,
+): { create: string | null; warning: string | null } {
+  if (existing === "") {
+    const state = {
+      v: STATE_VERSION,
+      category: asked ?? CATEGORIES[0],
+      startedAt: nowMs,
+      buildSha,
+      updatedAt: nowMs,
+      milestone: null,
+      splits: [],
+      reloads: [],
+      builds: [],
+    };
+    return { create: JSON.stringify(state), warning: null };
+  }
+  let category: unknown;
+  try {
+    category = (JSON.parse(existing) as { category?: unknown }).category ?? CATEGORIES[0];
+  } catch {
+    return { create: null, warning: null };
+  }
+  const warning =
+    asked !== undefined && asked !== category
+      ? `WARN boot: this run is category ${String(category)}; --category ${asked} ignored`
+      : null;
+  return { create: null, warning };
+}
+
 async function fetchManifest(ns: NS): Promise<Manifest> {
   for (let failures = 1; ; failures++) {
     let error = "download failed";
@@ -123,6 +207,17 @@ async function hashesOnHome(ns: NS, manifest: Manifest): Promise<Record<string, 
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
+  const bootMs = Date.now();
+  // First: never disturb a live run (a retype, or autoexec racing the human).
+  if (runIsLive(ns.ps("home"), ns.pid)) {
+    ns.tprint("boot: run already live");
+    return;
+  }
+  const asked = parseBootArgs(ns.args);
+  if (!asked.ok) {
+    ns.tprint("ERROR " + asked.error);
+    return;
+  }
   const manifest = await fetchManifest(ns);
   let fetched = 0;
   for (let failures = 1; ; failures++) {
@@ -140,6 +235,9 @@ export async function main(ns: NS): Promise<void> {
   }
   const total = Object.keys(manifest.files).length;
   ns.tprint(`boot: build ${manifest.source.slice(0, 7)} on home (${fetched} fetched, ${total - Math.min(fetched, total)} kept)`);
-  // preventDuplicates: never a second conductor (#44 adds the full live-run guard).
+  const runState = stateOnBoot(ns.read(STATE_FILE), asked.category, manifest.source, bootMs);
+  if (runState.warning !== null) ns.tprint(runState.warning);
+  if (runState.create !== null) ns.write(STATE_FILE, runState.create, "w");
+  // preventDuplicates: a last line of defence behind the live-run guard above.
   ns.spawn(CONDUCTOR, { spawnDelay: 0, temporary: true, preventDuplicates: true });
 }

@@ -1,5 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { filesToFetch, parseManifest, pinnedUrl, retryDelayMs, sha256Hex } from "./boot.ts";
+import {
+  filesToFetch,
+  parseBootArgs,
+  parseManifest,
+  pinnedUrl,
+  retryDelayMs,
+  runIsLive,
+  sha256Hex,
+  STATE_FILE as BOOT_STATE_FILE,
+  stateOnBoot,
+} from "./boot.ts";
+import { CATEGORIES, parseState, STATE_FILE } from "./sr/state.ts";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const SOURCE = "89abcdef0123456789abcdef0123456789abcdef";
@@ -88,5 +99,100 @@ describe("sha256Hex", () => {
     expect(await sha256Hex("")).toBe(H_EMPTY);
     // "é" is two UTF-8 bytes: `printf 'caf\xc3\xa9' | sha256sum`
     expect(await sha256Hex("café")).toBe("850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e");
+  });
+});
+
+describe("runIsLive: what a boot sees on home", () => {
+  const me = 7;
+  const proc = (filename: string, pid: number) => ({ filename, pid });
+
+  test("a boot alone on home starts the run", () => {
+    expect(runIsLive([proc("boot.js", me)], me)).toBe(false);
+  });
+
+  test("a running conductor means the run is live", () => {
+    expect(runIsLive([proc("sr/conductor.js", 3), proc("boot.js", me)], me)).toBe(true);
+  });
+
+  test("an earlier boot still at work means the run is live", () => {
+    expect(runIsLive([proc("boot.js", 5), proc("boot.js", me)], me)).toBe(true);
+  });
+
+  test("of two boots started together, only the later one stands down", () => {
+    // The earlier one sees a later boot and carries on, so exactly one boot runs.
+    expect(runIsLive([proc("boot.js", 5), proc("boot.js", me)], 5)).toBe(false);
+  });
+
+  test("other scripts on home do not count", () => {
+    expect(runIsLive([proc("sr/casino.js", 2), proc("sr/x.js", 1), proc("boot.js", me)], me)).toBe(false);
+  });
+});
+
+describe("parseBootArgs: the category argument", () => {
+  test("no argument leaves the category to the run (open for a new one)", () => {
+    expect(parseBootArgs([])).toEqual({ ok: true, category: undefined });
+  });
+
+  test.each([
+    [["--category", "strict"], "strict"],
+    [["--category=strict"], "strict"],
+    [["--category", "open"], "open"],
+  ])("%j asks for %s", (args, category) => {
+    expect(parseBootArgs(args)).toEqual({ ok: true, category });
+  });
+
+  test("accepts every category the state file knows", () => {
+    for (const c of CATEGORIES) expect(parseBootArgs(["--category", c])).toEqual({ ok: true, category: c });
+  });
+
+  test.each([
+    [["--category", "any%"], "boot: unknown category any% (open, strict)"],
+    [["--category"], "boot: --category needs a value (open, strict)"],
+    [["strict"], "boot: unknown argument strict; usage: run boot.js [--category open|strict]"],
+    [[3], "boot: unknown argument 3; usage: run boot.js [--category open|strict]"],
+  ])("%j is refused", (args, error) => {
+    expect(parseBootArgs(args)).toEqual({ ok: false, error });
+  });
+});
+
+describe("stateOnBoot: the state file at boot", () => {
+  const T0 = Date.UTC(2026, 10, 7, 12, 0, 0);
+  const existing = (category: string) =>
+    JSON.stringify({ v: 1, category, startedAt: T0 - 3_600_000, buildSha: SOURCE, updatedAt: T0 - 50_000 });
+
+  test("a fresh run creates a file the conductor reads, started now, open by default", () => {
+    const r = stateOnBoot("", undefined, SOURCE, T0);
+    expect(r.warning).toBeNull();
+    expect(parseState(r.create ?? "")).toEqual({
+      ok: true,
+      state: {
+        v: 1, category: "open", startedAt: T0, buildSha: SOURCE, updatedAt: T0,
+        milestone: null, splits: [], reloads: [], builds: [],
+      },
+    });
+  });
+
+  test("boot creates the file where the conductor reads it", () => {
+    expect(BOOT_STATE_FILE).toBe(STATE_FILE);
+  });
+
+  test("a fresh run records the category asked for", () => {
+    const r = parseState(stateOnBoot("", "strict", SOURCE, T0).create ?? "");
+    expect(r.ok && r.state.category).toBe("strict");
+  });
+
+  test("a category given against an existing run is ignored with a warning", () => {
+    expect(stateOnBoot(existing("open"), "strict", SOURCE, T0)).toEqual({
+      create: null,
+      warning: "WARN boot: this run is category open; --category strict ignored",
+    });
+  });
+
+  test.each([undefined, "open"])("resuming an open run with %s writes nothing and warns of nothing", (asked) => {
+    expect(stateOnBoot(existing("open"), asked, SOURCE, T0)).toEqual({ create: null, warning: null });
+  });
+
+  test("a file boot cannot read is left alone, for the conductor to report", () => {
+    expect(stateOnBoot("{", "strict", SOURCE, T0)).toEqual({ create: null, warning: null });
   });
 });
