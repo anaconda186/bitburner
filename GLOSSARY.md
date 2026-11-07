@@ -99,6 +99,22 @@ _Avoid_: Grinding
 The stretch after the last install, from no exp up to the hacking level the BitNode's World Daemon requires.
 _Avoid_: Endgame, last push
 
+**Seed**:
+The money a session starts trading from, supplied by the casino after a reset.
+_Avoid_: Stake, bankroll
+
+**Price-only trader**:
+The BN8 trader before the 4S TIX API is bought: it decides from price history alone.
+_Avoid_: Blind trader
+
+**Oracle trader**:
+The BN8 trader once the 4S TIX API is bought and it reads exact forecasts.
+_Avoid_: 4S trader
+
+**Aug phase**:
+In BN8, the installs that bring the player to 30 augmentations before the final session.
+_Avoid_: Prep phase
+
 ## Rules
 
 **Category**:
