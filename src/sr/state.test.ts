@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseState, serializeState, stateWrite, type RunState, type Written } from "./state.ts";
+import { parseState, reachedMilestones, recordMilestone, serializeState, stateWrite, type RunState, type Written } from "./state.ts";
 
 const BUILD = "89abcdef0123456789abcdef0123456789abcdef";
 const T0 = Date.UTC(2026, 10, 7, 12, 0, 0);
@@ -139,5 +139,43 @@ describe("stateWrite: when the conductor writes", () => {
   test("never changes startedAt and keeps unknown fields", () => {
     const w = stateWrite({ ...start, futureField: 1 }, { text: serializeState(start), atMs: T0 }, T0 + 3_600_000);
     expect(w && JSON.parse(w.text)).toMatchObject({ startedAt: T0, updatedAt: T0 + 3_600_000, futureField: 1 });
+  });
+});
+
+describe("milestones in the state file", () => {
+  const start: RunState = {
+    v: 1, category: "open", startedAt: T0, buildSha: BUILD, updatedAt: T0,
+    milestone: null, splits: [], reloads: [], builds: [],
+  };
+
+  test("recording one sets the milestone field and adds a split at the time since the start", () => {
+    const one = recordMilestone(start, "bn1.1:casino", T0 + 210_000);
+    expect(one).toMatchObject({ milestone: "bn1.1:casino", splits: [{ milestone: "bn1.1:casino", ms: 210_000 }] });
+    const two = recordMilestone(one, "bn1.1", T0 + 9_000_000);
+    expect(two.milestone).toBe("bn1.1");
+    expect(two.splits).toEqual([
+      { milestone: "bn1.1:casino", ms: 210_000 },
+      { milestone: "bn1.1", ms: 9_000_000 },
+    ]);
+  });
+
+  test("the reached milestones are the ones recorded, read back from the file", () => {
+    expect(reachedMilestones(start)).toEqual([]);
+    const two = recordMilestone(recordMilestone(start, "bn1.1:casino", T0 + 1), "bn1.1", T0 + 2);
+    const read = parseState(serializeState(two));
+    if (!read.ok) throw new Error(read.error);
+    expect(reachedMilestones(read.state)).toEqual(["bn1.1:casino", "bn1.1"]);
+  });
+
+  test("a milestone in the field but missing from the splits still counts as reached", () => {
+    expect(reachedMilestones({ ...start, milestone: "bn4.1", splits: [{ milestone: "bn1.1", ms: 5 }, { junk: true }] })).toEqual([
+      "bn1.1",
+      "bn4.1",
+    ]);
+  });
+
+  test("a recorded milestone is written on the tick it is reached", () => {
+    const last = { text: serializeState(start), atMs: T0 };
+    expect(stateWrite(recordMilestone(start, "bn1.1", T0 + 1000), last, T0 + 1000)).not.toBeNull();
   });
 });

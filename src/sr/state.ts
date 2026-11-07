@@ -92,6 +92,30 @@ export function parseState(body: string): StateResult {
   return { ok: true, state };
 }
 
+/**
+ * The state once milestone `name` is reached at `nowMs`: it becomes the
+ * `milestone` field, and a split `{ milestone, ms }` is added, with `ms` the
+ * time since the run started (gross). #49 adds the rest of the split's fields.
+ */
+export function recordMilestone(state: RunState, name: string, nowMs: number): RunState {
+  return { ...state, milestone: name, splits: [...state.splits, { milestone: name, ms: nowMs - state.startedAt }] };
+}
+
+/**
+ * Every milestone the run has recorded, in order: each split's milestone,
+ * plus the `milestone` field. This is what makes a milestone count only once,
+ * across reloads too, since the file rolls back with the save.
+ */
+export function reachedMilestones(state: RunState): string[] {
+  const names: string[] = [];
+  for (const split of state.splits) {
+    const name = (split as { milestone?: unknown } | null)?.milestone;
+    if (typeof name === "string" && !names.includes(name)) names.push(name);
+  }
+  if (state.milestone !== null && !names.includes(state.milestone)) names.push(state.milestone);
+  return names;
+}
+
 /** The file's text for a state, unknown fields included. */
 export function serializeState(state: RunState): string {
   return JSON.stringify(state);

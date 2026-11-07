@@ -19,7 +19,9 @@ import { decide, type Action, type ProbeReading, type Snapshot } from "./decide.
 import { awaitReply, isScriptDeath, launchHelper, pollReply, replyPorts, type Launched } from "./helper-calls.ts";
 import type { Json, Reply } from "./helper-contract.ts";
 import { HELPER_SCRIPTS, PROBES, type HelperScript, type ProbeName, type ProbeValues } from "./helpers.ts";
+import { MILESTONES, milestonesReached } from "./milestones.ts";
 import { openRunState } from "./run-state.ts";
+import { reachedMilestones, recordMilestone } from "./state.ts";
 
 /** Time between iterations when nothing went wrong. */
 const TICK_MS = 1000;
@@ -132,6 +134,10 @@ export async function main(ns: NS): Promise<void> {
       collectProbes(ns, m);
       const snapshot = takeSnapshot(ns, m);
       await carryOut(ns, m, decide(snapshot));
+      for (const name of milestonesReached(MILESTONES, snapshot, reachedMilestones(record.state))) {
+        record.update((state) => recordMilestone(state, name, snapshot.nowMs));
+        ns.tprint(`conductor: milestone ${name}`);
+      }
       record.keep(snapshot.nowMs);
       beats++;
       ns.print(`heartbeat ${beats} at ${new Date(snapshot.nowMs).toISOString()}`);

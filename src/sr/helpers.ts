@@ -9,6 +9,8 @@
 //     value type in ProbeValues and how stale it may get;
 //   - an action helper (a call that changes the game) goes in CALLS.
 
+import type { RouteFacts } from "./order.ts";
+
 /** Where every helper lives on home. */
 export type HelperScript = `sr/h/${string}.js`;
 
@@ -26,6 +28,8 @@ export interface ProbeValues {
    * counts at once, even when home is too full for this probe to run again.
    */
   network: { readonly hosts: readonly string[] };
+  /** The current BitNode and the owned Source-Files (#48): where the run is in the BitNode order. */
+  route: RouteFacts;
 }
 
 export type ProbeName = keyof ProbeValues;
@@ -39,6 +43,9 @@ export interface ProbeSpec {
 /** Probes take no argument: each fills one snapshot field, `snapshot.probes[name]`. */
 export const PROBES: { readonly [P in ProbeName]: ProbeSpec } = {
   network: { script: "sr/h/network.js", maxAgeMs: 10_000 },
+  // Changes only at a reset, which also restarts the conductor; refreshed
+  // once a minute so a failed reading is retried.
+  route: { script: "sr/h/route.js", maxAgeMs: 60_000 },
 };
 
 /** Action helpers, by name. Launched one at a time and awaited. None yet. */
