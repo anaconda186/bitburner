@@ -49,7 +49,12 @@ export const RAM_BUDGETS: BudgetTable = {
   // It must fit an 8 GB home." Started by the start command, autoexec, reset
   // callbacks, the driver and the casino, so it runs everywhere.
   "boot.js": { budget: 4, contexts: EVERYWHERE },
-  // #43: the heartbeat conductor boot.js spawns, measured at 1.60 GB. boot.js
-  // plus the conductor must fit an 8 GB home, and it runs everywhere.
+  // #43/#47: the conductor boot.js spawns. It must fit beside boot.js on an
+  // 8 GB home; tools/ram-budget.test.ts holds the two budgets to that. At #47
+  // it costs 3.85: base 1.6, exec 1.3, scp 0.6, getScriptRam 0.1, isRunning
+  // 0.1, hasRootAccess, getServerMaxRam and getServerUsedRam 0.05 each. Only
+  // 0.15 GB is left: further expensive reads belong in probe helpers.
   "sr/conductor.js": { budget: 4, contexts: EVERYWHERE },
+  // #47: the network probe helper. Base 1.6, scan 0.2.
+  "sr/h/network.js": { budget: 1.8, contexts: EVERYWHERE },
 };

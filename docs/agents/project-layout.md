@@ -55,6 +55,16 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 - **The conductor** (`src/sr/conductor.ts`) loops snapshot → `decide` (`src/sr/decide.ts`, pure) → act, once a second. Each iteration sits in a try/catch that prints `ERROR conductor: ...` with `tprint` and waits `backoffMs(failures)` (`src/sr/backoff.ts`). A `ScriptDeath` (a kill or a reset) is rethrown, never retried.
 - **Backoff:** `src/sr/backoff.ts` for everything under `sr/`. boot.js keeps an identical copy (`retryDelayMs`), because it may import nothing. Both have the same tests.
 
+## Helpers, snapshot and actions (set by #47)
+
+- **A helper** is a one-purpose entry script in `src/sr/h/` (home path `sr/h/<name>.js`), written as `main` calling `serve(ns, (arg) => <one call>)` from `src/sr/h/serve.ts`. It is launched with `exec` (1 thread, temporary) and two arguments: the argument as a JSON string, and a reply port. It writes exactly one `Reply` (`{ ok: true, value }` or `{ ok: false, error }`, in `src/sr/helper-contract.ts`) to that port and exits. `serve` also replies from `atExit` if the helper is killed or crashes. Values must be plain JSON: no Map, no class instances.
+- **Registering:** add every helper to `src/sr/helpers.ts`. A probe goes in `PROBES` (plus its value type in `ProbeValues`), and an action helper goes in `CALLS`. Give it a row in `tools/ram-budget.ts`. `src/sr/helpers.test.ts` fails if a helper in `src/sr/h/` is not registered. `src/sr/h/serve.ts` is copied next to any helper launched off home, so it must import nothing at runtime.
+- **Probes** fill snapshot fields: `snapshot.probes[name]` is the latest reply plus `atMs`. A probe is launched and not awaited, and its reply lands in the snapshot on the next loop. It is relaunched once its reading is `maxAgeMs` old.
+- **Action helpers** (`{ kind: "call", script, arg, host }`) are launched one at a time and awaited. Their outcome lands in `snapshot.lastCall`. At most one per `decide`, and none while `snapshot.callRunning`.
+- **Placement:** sub-deciders return `Want`s (actions without a host). `place(snapshot, wants)` in `decide.ts` is the last step of `decide`. It drops any helper that fits nowhere or has no known RAM cost. Home comes first, then the rooted server with the most free RAM.
+- **A failed launch** (scp, exec or a throw) is "not done". It is never fatal, and `decide` wants it again next loop.
+- **Conductor RAM:** 3.85 GB of its 4 GB budget. `tools/ram-budget.test.ts` keeps boot's and the conductor's budgets at 8 GB or less in total. Every identifier reachable from the conductor (`decide.ts` and its imports included) that is named like an NS function is charged; `probe` is one of them (`dnet.probe`).
+
 ## RAM budget (`tools/ram-budget.ts`)
 
 - **Every entry script needs a row.** An entry script is a built `.js` file that exports `main`; files without `main` are libraries and need none. A new entry script with no row fails the gate, and so does a row whose script is not in the build.
