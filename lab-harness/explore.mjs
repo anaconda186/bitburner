@@ -1,0 +1,25 @@
+import { startServer, launch, freshSave, decode, field, OUT } from './lib.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const { server, base } = await startServer();
+const b = await launch();
+const t0 = Date.now();
+const s = await freshSave(b, base);
+console.log('fresh save bytes', s.length, 'ms', Date.now() - t0);
+fs.writeFileSync(path.join(OUT, 'fresh.json.gz'), s);
+const o = decode(s);
+console.log(Object.keys(o.data).join(','));
+const P = field(o, 'PlayerSave').data;
+console.log('money', P.money, 'city', P.city, 'exploits', P.exploits);
+console.log('keys', Object.keys(P).filter((k) => /aug|skills|exp|sourceFiles|bitNode/i.test(k)).join(','));
+console.log('skills', JSON.stringify(P.skills), 'exp', JSON.stringify(P.exp));
+const A = field(o, 'AllServersSave');
+const h = A.home.data;
+console.log('home keys', Object.keys(h).join(','));
+console.log('scripts', JSON.stringify(h.scripts).slice(0, 300));
+console.log('maxRam', h.maxRam);
+const S = field(o, 'SettingsSave');
+console.log('settings', Object.keys(S).filter((k) => /Suppress|Autoexec|Autosave|Exclude/.test(k)).map((k) => k + '=' + S[k]).join(' '));
+await b.close();
+server.close();

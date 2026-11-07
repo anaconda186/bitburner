@@ -1,0 +1,64 @@
+{
+ "label": "chromium1",
+ "startMoney": 300000,
+ "totalSeconds": 215.014,
+ "hands": 262,
+ "reloads": 137,
+ "pageLoads": 138,
+ "results": {
+  "Push! (Tie)": 23,
+  "You lost!": 137,
+  "You won!": 91,
+  "You Won! Blackjack!": 11
+ },
+ "saveMs": {
+  "p50": 22,
+  "p95": 32,
+  "max": 63
+ },
+ "handMs": {
+  "p50": 16,
+  "max": 49
+ },
+ "reloadToScriptMs": {
+  "p50": 1293,
+  "p95": 1615,
+  "max": 2313
+ },
+ "reloadToTableMs": {
+  "p50": 1414,
+  "p95": 1769,
+  "max": 2536
+ },
+ "restoresOk": 137,
+ "restoresBad": [],
+ "scriptRestarts": 138,
+ "firstStart": {
+  "at": 1794018764255,
+  "ev": "start",
+  "t": 1794018764250,
+  "money": 300000,
+  "hadHandler": true,
+  "ram": 52.8
+ },
+ "handlerSeenOnRestart": 137,
+ "browserDialogs": 0,
+ "capEvent": {
+  "at": 1794018976077,
+  "ev": "cap",
+  "money": 10003600000,
+  "casino": 10003300000,
+  "refused": true,
+  "dialogVisible": false,
+  "modals": 1
+ },
+ "doneEvent": {
+  "at": 1794018977583,
+  "ev": "done",
+  "t": 1794018977581,
+  "money": 10003600000
+ },
+ "errors": [],
+ "saveBytes": 11471,
+ "exploits": []
+}

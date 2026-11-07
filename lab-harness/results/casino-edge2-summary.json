@@ -1,0 +1,64 @@
+{
+ "label": "edge2",
+ "startMoney": 300000,
+ "totalSeconds": 208.933,
+ "hands": 268,
+ "reloads": 141,
+ "pageLoads": 142,
+ "results": {
+  "You won!": 99,
+  "You lost!": 141,
+  "You Won! Blackjack!": 6,
+  "Push! (Tie)": 22
+ },
+ "saveMs": {
+  "p50": 23,
+  "p95": 63,
+  "max": 83
+ },
+ "handMs": {
+  "p50": 19,
+  "max": 56
+ },
+ "reloadToScriptMs": {
+  "p50": 1195,
+  "p95": 1537,
+  "max": 1678
+ },
+ "reloadToTableMs": {
+  "p50": 1318,
+  "p95": 1695,
+  "max": 1842
+ },
+ "restoresOk": 141,
+ "restoresBad": [],
+ "scriptRestarts": 142,
+ "firstStart": {
+  "at": 1794018367335,
+  "ev": "start",
+  "t": 1794018367331,
+  "money": 300000,
+  "hadHandler": true,
+  "ram": 52.8
+ },
+ "handlerSeenOnRestart": 141,
+ "browserDialogs": 0,
+ "capEvent": {
+  "at": 1794018574423,
+  "ev": "cap",
+  "money": 10042000000,
+  "casino": 10041700000,
+  "refused": true,
+  "dialogVisible": false,
+  "modals": 1
+ },
+ "doneEvent": {
+  "at": 1794018575936,
+  "ev": "done",
+  "t": 1794018575935,
+  "money": 10042000000
+ },
+ "errors": [],
+ "saveBytes": 11473,
+ "exploits": []
+}
