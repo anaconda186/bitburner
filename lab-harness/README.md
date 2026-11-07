@@ -24,6 +24,7 @@ Everything runs in real time, headless, in a fresh browser context. Screenshots 
 | `node run_restart.mjs` | Which scripts restart after a reload: normal, `--temporary`, autoexec | 30 s |
 | `node run_reset.mjs` | The `atExit` timer across a UI-driven install and a BitNode entry | 1 min |
 | `node run_casino.mjs <label> [startMoney]` | A full casino run to the $10b cap, with a timing summary | 3–4 min |
+| `node run_casino_back.mjs <label> <autoexec|bare>` | How the casino comes back: non-temporary on a 64 GB cloud server, with stand-ins for `boot.js` and the conductor. `autoexec` runs them on every load, `bare` leaves them out until the casino hands back. Ends with a reload after the finish | 3–4 min |
 
 `lab/` holds the in-game scripts. The runners write them into edited saves, so they never go through `wget`.
 

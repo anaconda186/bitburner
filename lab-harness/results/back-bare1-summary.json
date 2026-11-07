@@ -1,0 +1,91 @@
+{
+ "label": "bare1",
+ "mode": "bare",
+ "stalled": false,
+ "totalSeconds": 150.551,
+ "hands": 225,
+ "reloads": 108,
+ "hosts": [
+  "casino-1"
+ ],
+ "temporaryFlags": [
+  false
+ ],
+ "ram": 54.45,
+ "scriptRestarts": 109,
+ "reloadToCasinoMs": {
+  "n": 108,
+  "p50": 1126,
+  "p95": 1292,
+  "max": 1818
+ },
+ "reloadToTableMs": {
+  "n": 108,
+  "p50": 1247,
+  "p95": 1431,
+  "max": 1922
+ },
+ "reloadToBootMs": {
+  "n": 108,
+  "p50": 76479,
+  "p95": 142925,
+  "max": 149525
+ },
+ "reloadToConductorMs": {
+  "n": 108,
+  "p50": 76490,
+  "p95": 142936,
+  "max": 149536
+ },
+ "restoresOk": 108,
+ "restoresBad": 0,
+ "handlerSeenOnRestart": 108,
+ "browserDialogs": 0,
+ "bootOutcomes": {
+  "would-fetch": 1,
+  "would-fetch:from-casino": 1
+ },
+ "bootOnReloadSawCasino": 0,
+ "bootOnReloadMissedCasino": 1,
+ "bootOnReloadAbsent": 107,
+ "casinoLaunches": [
+  {
+   "at": 1794022147106,
+   "ev": "casino-launched",
+   "pid": 3
+  }
+ ],
+ "capEvent": {
+  "at": 1794022295346,
+  "ev": "cap",
+  "money": 10053600000,
+  "casino": 10053300000
+ },
+ "doneEvent": {
+  "at": 1794022296873,
+  "ev": "done",
+  "t": 1794022296872,
+  "money": 10053600000,
+  "bootPid": 2
+ },
+ "resumeEvent": {
+  "at": 1794022296886,
+  "ev": "cond-resume",
+  "t": 1794022296885,
+  "net": 10053300000,
+  "money": 10053600000
+ },
+ "casinoErrors": [],
+ "errors": [],
+ "reloadAfterFinish": {
+  "casinoRestarted": 1,
+  "capAtStart": 1,
+  "handsPlayed": 0,
+  "bootOutcomes": [
+   "would-fetch:from-casino"
+  ],
+  "resumed": 1
+ },
+ "saveBytes": 14375,
+ "exploits": []
+}
