@@ -61,4 +61,7 @@ export const RAM_BUDGETS: BudgetTable = {
   "sr/conductor.js": { budget: 4, contexts: EVERYWHERE },
   // #47: the network probe helper. Base 1.6, scan 0.2.
   "sr/h/network.js": { budget: 1.8, contexts: EVERYWHERE },
+  // #48: the route probe (current BitNode, owned Source-Files). Base 1.6,
+  // getResetInfo 1.0, which the conductor can't afford.
+  "sr/h/route.js": { budget: 2.6, contexts: EVERYWHERE },
 };

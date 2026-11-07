@@ -81,6 +81,18 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 - **A failed launch** (scp, exec or a throw) is "not done". It is never fatal, and `decide` wants it again next loop.
 - **Conductor RAM:** 3.85 GB of its 4 GB budget. `tools/ram-budget.test.ts` keeps boot's and the conductor's budgets at 8 GB or less in total. Every identifier reachable from the conductor (`decide.ts` and its imports included) that is named like an NS function is charged; `probe` is one of them (`dnet.probe`).
 
+## BitNode order and milestones (set by #48)
+
+- **The order** is one table, `BITNODE_ORDER` in `src/sr/order.ts`: 45 `{ bn, level, finish }` entries, `finish` being `"hacking"` or `"blackops"`. Change the order only there.
+- **Position** (`position(route)` in `order.ts`) follows from `RouteFacts = { currentNode, ownedSF }` alone. It gives `playing` (the current BitNode at the level above the one owned), its `index` in the order (-1 if it's not in it), `onRoute` (true when `playing` is the first destruction not yet owned), `next` (the BitNode to enter on destroying this one, or null when that reaches the finish line) and `finished`. Nothing about the position is stored.
+- **The `route` probe** (`sr/h/route.js`, 2.6 GB, `maxAgeMs` 60 s) reads `getResetInfo` and returns `RouteFacts`, with `ownedSF` as a plain object. The conductor can't afford `getResetInfo` itself. So `snapshot.probes.route` is the snapshot's route; until it lands, nothing that needs the position is known.
+- **Milestones** (`src/sr/milestones.ts`): `{ name, scope?, test(snapshot, route) }`.
+  - The spine (`SPINE`) is `bn<N>.<L>`, one per entry, and has no scope. Its test is SF N ≥ L, so it passes just after the destruction, in the next BitNode.
+  - Plans make their extras with `scoped(bn, level | undefined, suffix, test)`. That gives `bn<N>.<L>:<suffix>`, or `bn<N>.<suffix>` for any level of BitNode N. An extra is checked only while `position(route).playing` matches its scope, so a skipped extra is just absent.
+  - Add a plan's list to `MILESTONES = registry(SPINE, ...)`. `registry` throws on a name used twice.
+  - `milestonesReached(milestones, snapshot, reached)` returns the due names in registry order. Each test is checked on its own.
+- **Recording:** after `carryOut`, the conductor calls `milestonesReached(MILESTONES, snapshot, reachedMilestones(record.state))`. For each name it calls `record.update((s) => recordMilestone(s, name, nowMs))` and prints `conductor: milestone <name>`. `recordMilestone` (in `state.ts`) sets `milestone` and appends a split `{ milestone, ms }`, with `ms` the time since `startedAt`. `reachedMilestones` reads the names back from the splits plus `milestone`. That is how a milestone counts once, across reloads too, since the state file rolls back with the save. #49 adds the split's other fields and the real terminal line.
+
 ## RAM budget (`tools/ram-budget.ts`)
 
 - **Every entry script needs a row.** An entry script is a built `.js` file that exports `main`; files without `main` are libraries and need none. A new entry script with no row fails the gate, and so does a row whose script is not in the build.
