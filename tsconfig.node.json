@@ -1,0 +1,11 @@
+{
+  // Everything that runs in Node: tools/, test/ and every *.test.ts. Never
+  // emitted: Node runs tools/*.ts directly (type stripping), Vitest runs tests.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["tools/**/*.ts", "test/**/*.ts", "src/**/*.test.ts", "vitest.config.ts"]
+}
