@@ -41,6 +41,24 @@ _Avoid_: Win condition, ending, kill
 A Source-File level whose effect speeds up many later destructions, beyond adding small multipliers. SF4.3 is the clearest example.
 _Avoid_: Unlock, key SF
 
+**Install**:
+Applying the augmentations queued so far, which sends the player back to the start of the current BitNode.
+_Avoid_: Ascend, prestige
+
+**Reset**:
+Any event that wipes the run's scripts: an install or entering a BitNode.
+_Avoid_: Using it to mean an install
+
+## The system
+
+**Driver**:
+The script that does a run's UI automation.
+_Avoid_: Clicker, UI script
+
+**Conductor**:
+The small script on home that keeps a run going by handing work to short-lived helper scripts.
+_Avoid_: Orchestrator, daemon
+
 ## Rules
 
 **Category**:
