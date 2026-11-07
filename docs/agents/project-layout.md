@@ -49,11 +49,27 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 
 ## Boot and the conductor (set by #43)
 
+- **`boot.js` starts with the live-run guard** (#44). If `ns.ps("home")` shows `sr/conductor.js`, or a `boot.js` with a lower pid than its own, it prints `boot: run already live` and exits, touching nothing. Of two boots started together, the later one stands down. Then it reads its one argument, `--category <open|strict>` (or `--category=<x>`); anything else prints an `ERROR boot:` line with the usage and exits.
 - **`boot.js`** fetches `manifest.json` from the `release` branch, hashes every listed file already on home (sha256 of its text as UTF-8, the same bytes the manifest hashes), and fetches only the missing or changed ones from `<manifest sha>/<path>`. boot.js is in the list too, so home's copy follows the build. It retries the manifest and each failed file forever, printing each failure with `tprint`, with the backoff 1, 2, 4, 8, 16, then 30 s. Then it calls `ns.spawn("sr/conductor.js", { spawnDelay: 0, temporary: true, preventDuplicates: true })`.
 - **`sr/conductor.js` is a fixed entry point.** Old copies of boot.js in players' saves spawn it by name, so it never moves or gets renamed.
 - **Temporary scripts:** boot.js is the only script started non-temporary (by the terminal, autoexec or a reset callback). Every script a run script launches passes `temporary: true` (the casino is the one planned exception, #23).
 - **The conductor** (`src/sr/conductor.ts`) loops snapshot → `decide` (`src/sr/decide.ts`, pure) → act, once a second. Each iteration sits in a try/catch that prints `ERROR conductor: ...` with `tprint` and waits `backoffMs(failures)` (`src/sr/backoff.ts`). A `ScriptDeath` (a kill or a reset) is rethrown, never retried.
 - **Backoff:** `src/sr/backoff.ts` for everything under `sr/`. boot.js keeps an identical copy (`retryDelayMs`), because it may import nothing. Both have the same tests.
+
+## State file (set by #44)
+
+- **`sr/state.json` on home** holds only what the game forgets: `v, category, startedAt, buildSha, updatedAt, milestone, splits, reloads, builds`, in that order, then any newer fields.
+- **Writers:**
+  - `boot.js` creates the file only when it is missing, after the fetch. `startedAt` and `updatedAt` are set to the moment that boot started, `buildSha` to the manifest's `source`, the category to the argument or `open`, and the lists start empty.
+  - An existing file is never written by boot. A different `--category` is ignored with `WARN boot: this run is category <c>; --category <x> ignored`.
+  - After that, only the conductor writes it. `test/state-writers.test.ts` enforces this on the sources: the path is spelled out only in `boot.ts` and `sr/state.ts`, and `STATE_FILE`/`stateWrite` reach the game only through `sr/run-state.ts`, which only the conductor imports.
+- **Pure rules (seam E), `src/sr/state.ts`:**
+  - `parseState(text)` returns `{ok, state} | {ok:false, error}`. `""` means missing. Every field except `startedAt` gets a default. Unknown fields are kept. A newer `v` than `STATE_VERSION`, a wrong-typed field or an unknown category is refused.
+  - `serializeState(state)`.
+  - `stateWrite(state, last, nowMs)` returns `{state, text} | null`. It writes on any change and every `REFRESH_MS` (10 s), with `updatedAt = nowMs`.
+  - `CATEGORIES` and `DEFAULT_CATEGORY` are exported too. boot.js keeps import-free copies of the path, version and categories, and `src/boot.test.ts` checks them against `state.ts` by behaviour.
+- **The conductor's hold:** `openRunState(ns)` in `src/sr/run-state.ts` returns `{ state, keep(nowMs) }`, or prints `ERROR conductor: <why>` and returns null. The conductor then exits, so a build that can't use the file refuses to run and leaves it untouched. `keep` runs once per iteration, after `carryOut`. Later tickets that change the state (milestones, splits, reloads, builds) add pure functions to `state.ts` and a setter on the record.
+- **Schema growth:** add fields with a default in `parseState`, never rename or remove one, and bump `STATE_VERSION` (and boot's copy) only for a true break.
 
 ## Helpers, snapshot and actions (set by #47)
 

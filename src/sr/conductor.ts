@@ -19,6 +19,7 @@ import { decide, type Action, type ProbeReading, type Snapshot } from "./decide.
 import { awaitReply, isScriptDeath, launchHelper, pollReply, replyPorts, type Launched } from "./helper-calls.ts";
 import type { Json, Reply } from "./helper-contract.ts";
 import { HELPER_SCRIPTS, PROBES, type HelperScript, type ProbeName, type ProbeValues } from "./helpers.ts";
+import { openRunState } from "./run-state.ts";
 
 /** Time between iterations when nothing went wrong. */
 const TICK_MS = 1000;
@@ -119,6 +120,8 @@ async function callHelper(ns: NS, m: Memory, script: HelperScript, host: string,
 
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
+  const record = openRunState(ns);
+  if (record === null) return;
   ns.tprint("conductor: up");
   const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts() };
   let beats = 0;
@@ -129,6 +132,7 @@ export async function main(ns: NS): Promise<void> {
       collectProbes(ns, m);
       const snapshot = takeSnapshot(ns, m);
       await carryOut(ns, m, decide(snapshot));
+      record.keep(snapshot.nowMs);
       beats++;
       ns.print(`heartbeat ${beats} at ${new Date(snapshot.nowMs).toISOString()}`);
       if (snapshot.nowMs - lastTerminalBeat >= TERMINAL_BEAT_MS) {

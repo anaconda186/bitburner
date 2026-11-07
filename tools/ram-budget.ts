@@ -47,7 +47,11 @@ export type BudgetTable = Readonly<Record<string, BudgetRow>>;
 export const RAM_BUDGETS: BudgetTable = {
   // Spec #41: "about 3.6 GB plus a few tenths of a GB for the casino check.
   // It must fit an 8 GB home." Started by the start command, autoexec, reset
-  // callbacks, the driver and the casino, so it runs everywhere.
+  // callbacks, the driver and the casino, so it runs everywhere. #44: 3.80
+  // (base 1.60, spawn 2.00, ps 0.20 for the live-run guard). ps is then
+  // already paid for, so #56's casino check costs nothing more for a ps on a
+  // known host name (it throws on a host that doesn't exist, so catch it), or
+  // 0.20 more with scan to list the cloud servers.
   "boot.js": { budget: 4, contexts: EVERYWHERE },
   // #43/#47: the conductor boot.js spawns. It must fit beside boot.js on an
   // 8 GB home; tools/ram-budget.test.ts holds the two budgets to that. At #47
