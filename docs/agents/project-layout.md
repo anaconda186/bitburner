@@ -11,6 +11,7 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 | `npm run typecheck` | `tsc` over both projects (game scripts, then Node code). |
 | `npm test` | Vitest, once. |
 | `npm run build` | Clean `build/`, then compile `src/` into it. |
+| `npm run ram-check` | The static RAM budget gate over `build/` (run `build` first; `-- --build <dir>` for another folder). |
 | `npm run publish-release` | Push `build/` to the orphan `release` branch. CI runs it; for a local try, `-- --remote <path to a bare repo>`. |
 
 ## Folders
@@ -19,7 +20,7 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 |---|---|
 | `src/` | Game scripts in TypeScript. **`src/` mirrors home:** `src/boot.ts` becomes `boot.js` at the root, and every other script goes under `src/sr/`. Nothing else may live in `src/` except tests. |
 | `src/**/*.test.ts` | Unit tests, next to the code they test (seams A–E). Never compiled into `build/`. |
-| `tools/` | Node-side scripts (`fetch-game`, `publish`, later the RAM check, harness, `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
+| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, later the harness and `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
 | `test/` | Tests and checks that belong to no single file, such as `ns-api-guard.ts`, which proves the typecheck catches Netscript misuse. Later: the Playwright smoke harness. |
 | `.game/` | gitignored. `app/` = the v3.0.1 static build (the zip's `resources/app/`), `source/<repo path>` = pinned game source files. The game's code is never committed. |
 | `build/` | gitignored. Exactly the files the release ships. |
@@ -46,10 +47,16 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 - **History is kept.** Each publish's parent is the previous release tip, so older pinned SHAs keep working. The push is a plain fast-forward; if `release` moved, it fails and nothing changes.
 - **Start command:** `wget https://raw.githubusercontent.com/anaconda186/bitburner/release/boot.js boot.js; run boot.js`, submitted twice on a fresh save.
 
+## RAM budget (`tools/ram-budget.ts`)
+
+- **Every entry script needs a row.** An entry script is a built `.js` file that exports `main`; files without `main` are libraries and need none. A new entry script with no row fails the gate, and so does a row whose script is not in the build.
+- **A row is a budget in GB plus the contexts the script runs in** (`RAM_CONTEXTS`: `BN1.1`, `BN4`, `SF4.1`, `SF4.2`, `SF4.3`, `BN10 start`; `EVERYWHERE` is all of them). The gate prices the script in each with the game's own calculator and compares the worst case with the budget. Add a context preset when a row needs one; only the BitNode and the SF4 level change any cost.
+- **The calculator** (`tools/ram-calc.ts`) bundles the pinned `RamCalculations.ts` and its import closure from `.game/source/` with esbuild, stubbing `@player`, `@swc/wasm-web` and `@babel/standalone`. Each built file is passed in at its home path, so imports are charged as in the game. Its tests (`tools/ram-calc.test.ts`) pin the SF4 multipliers and the 25 GB `document`/`window` charge.
+
 ## CI (`.github/workflows/ci.yml`)
 
-- **One job, `gate`, runs on every push and PR:** `npm ci` → restore the `.game` cache → `fetch-game` → `typecheck` → `test` → `build` → publish (pushes to `main` only).
+- **One job, `gate`, runs on every push and PR:** `npm ci` → restore the `.game` cache → `fetch-game` → `typecheck` → `test` → `build` → `ram-check` → publish (pushes to `main` only).
 - **A failed step stops the job,** so a failing push never publishes and the previous release stays live.
-- **New gates** (the RAM budget in #45, the smoke test in #46) go as steps before "Publish to release".
+- **New gates** (the smoke test in #46) go as steps before "Publish to release", like the RAM budget step.
 - **The `.game` cache key** is the hash of `tools/game-pin.ts` and `tools/fetch-game.ts`.
 - **Runs are serialized per ref and never cancelled,** so `main` publishes in order.

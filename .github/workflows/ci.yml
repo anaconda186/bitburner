@@ -42,6 +42,12 @@ jobs:
       - run: npm test
       - run: npm run build
 
+      # Static RAM budget: the game's own calculator over build/, against the
+      # table in tools/ram-budget.ts. Any over-budget or unbudgeted entry
+      # script fails here, so it never reaches the publish step.
+      - name: RAM budget
+        run: npm run ram-check -- --build build
+
       - name: Publish to release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: npm run publish-release -- --build build --remote origin --source ${{ github.sha }}
