@@ -13,3 +13,7 @@ Uses the five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Project layout and release
+
+Folders, npm scripts, TypeScript rules, the release format and CI are in `docs/agents/project-layout.md`. Read it before adding code.
