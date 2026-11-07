@@ -67,6 +67,18 @@ _Avoid_: Batcher, hacking daemon
 The cloud servers the run owns. An install deletes them all, so each reset buys its own.
 _Avoid_: Purchased servers, pservs
 
+**Sleeve**:
+One of up to three permanent extra bodies the player owns once Source-File 10 is owned, each running a task of its own. The count survives every reset.
+_Avoid_: Clone, helper
+
+**Shock**:
+A sleeve's loss of effectiveness, from 100 (it earns no experience or reputation) down to 0. Every BitNode destruction resets it to 100, and entering BN10 caps it at 25.
+_Avoid_: Fatigue
+
+**Infiltrating sleeve**:
+A sleeve on the Infiltrate Synthoids task, which raises the available count of every Bladeburner contract and operation. It needs the player to have joined Bladeburner and ignores the sleeve's shock and stats.
+_Avoid_: Spy sleeve
+
 **Target**:
 The server the money engine is currently stealing money from.
 _Avoid_: Victim, mark
