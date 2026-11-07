@@ -1,0 +1,66 @@
+=== A. Maze size and walk length (inference; 400 random mazes per lab) ===
+lab | maze WxH | shortest moves (mean) | greedy DFS moves (mean / p90) | blind DFS moves (mean / p90) | unreachable
+1 | 21x13 | 17 | 28 / 38 | 51 / 88 | 0
+2 | 29x21 | 34 | 60 / 88 | 126 / 210 | 0
+3 | 41x25 | 55 | 102 / 148 | 209 / 366 | 0
+4 | 61x41 | 113 | 313 / 666 | 502 / 880 | 0
+5 | 61x41 | 114 | 325 / 712 | 525 / 904 | 0
+
+=== B. Time for one walker to finish the maze (moves x authenticate time on the lab server) ===
+lab | ms per move at cha=req+1 (Boots from lab 3 on) | ms per move at cha=1.5*req | greedy walk at req+1 | at 1.5*req | blind walk at req+1
+1 | 4900 | 3683 | 2.3 min | 1.7 min | 4.2 min
+2 | 4640 | 3319 | 4.6 min | 3.3 min | 9.7 min
+3 | 3542 | 2437 | 6.0 min | 4.1 min | 12.4 min
+4 | 3488 | 2371 | 18.2 min | 12.4 min | 29.2 min
+5 | 3474 | 2354 | 18.8 min | 12.8 min | 30.4 min
+
+=== C. Charisma experience the lab thresholds need (inverse of calculateSkill, skill.ts#L7-L15) ===
+lab | cha | mult with only BN15 + earlier lab augs | exp needed at that mult
+1 | 300 | 1.100 | 2.60e+6
+2 | 600 | 1.155 | 5.82e+9
+3 | 1500 | 1.224 | 2.20e+19
+4 | 2500 | 1.310 | 4.12e+28
+5 | 3000 | 1.310 | 6.23e+33
+
+Total charisma multiplier (BN15 1.1 included) needed to reach the threshold with a given exp budget:
+lab | cha | exp 1e+8 | exp 1e+10 | exp 1e+12 | exp 1e+14 | exp 1e+16
+1 | 300 | 0.77 | 0.56 | 0.44 | 0.36 | 0.31
+2 | 600 | 1.54 | 1.12 | 0.88 | 0.72 | 0.61
+3 | 1500 | 3.85 | 2.79 | 2.19 | 1.80 | 1.53
+4 | 2500 | 6.42 | 4.66 | 3.65 | 3.01 | 2.55
+5 | 3000 | 7.70 | 5.59 | 4.38 | 3.61 | 3.06
+
+Product of 27 non-lab charisma-level augs: 68.3x (an upper bound; cost and faction access unknown).
+  BN15 x sqrt of that product x lab augs = 11.8x -> exp for cha 3000: 1.46e+6, for 2500: 3.88e+5, 1500: 2.70e+4
+  BN15 x all of it x lab augs = 97.5x -> exp for cha 3000: 8.20e+2, for 2500: 6.19e+2, 1500: 3.03e+2
+
+=== D. Charisma exp income from phishing (phishing.ts#L12-L66), thread-limited ===
+lab | movable servers | mean RAM/server | threads if all RAM runs phishing | at 25%
+1 | 34 | 18 GB | 172 | 43
+2 | 58 | 24 GB | 387 | 96
+3 | 91 | 43 GB | 1077 | 269
+4 | 110 | 58 GB | 1766 | 441
+5 | 139 | 95 GB | 3662 | 915
+
+Seconds for charisma to reach each lab's threshold from a fresh install, phishing at 25% of network RAM, nothing else (inference):
+lab 1 (cha 300, 43 threads): lab augs only, exp mult 1: 2.0 h ; 3x that mult, exp mult 3: 9 s ; mult 6, exp mult 5: 2 s ; mult 12, exp mult 10: 1 s
+lab 2 (cha 600, 96 threads): lab augs only, exp mult 1: 58.4 d ; 3x that mult, exp mult 3: 38 s ; mult 6, exp mult 5: 3 s ; mult 12, exp mult 10: 1 s
+lab 3 (cha 1500, 269 threads): lab augs only, exp mult 1: never ; 3x that mult, exp mult 3: 2.8 h ; mult 6, exp mult 5: 47 s ; mult 12, exp mult 10: 2 s
+lab 4 (cha 2500, 441 threads): lab augs only, exp mult 1: never ; 3x that mult, exp mult 3: 56.3 d ; mult 6, exp mult 5: 52.6 min ; mult 12, exp mult 10: 4 s
+lab 5 (cha 3000, 915 threads): lab augs only, exp mult 1: never ; 3x that mult, exp mult 3: 1224.9 d ; mult 6, exp mult 5: 4.8 h ; mult 12, exp mult 10: 5 s
+
+=== E. Mutation pace (darknetNetworkUtils.ts#L9-L14, NetworkMovement.ts#L45-L66) ===
+lab 1: depth 7: mutation check every 4.29 s in BN15 (8.57 s elsewhere); each check proceeds with p=1.00
+lab 2: depth 12: mutation check every 2.50 s in BN15 (5.00 s elsewhere); each check proceeds with p=1.00
+lab 3: depth 19: mutation check every 1.58 s in BN15 (3.16 s elsewhere); each check proceeds with p=0.84
+lab 4: depth 23: mutation check every 1.30 s in BN15 (2.61 s elsewhere); each check proceeds with p=0.70
+lab 5: depth 29: mutation check every 1.03 s in BN15 (2.07 s elsewhere); each check proceeds with p=0.55
+
+=== F. Crossing an air gap by induceServerMigration (effects.ts#L245-L262, Darknet.ts#L413-L503) ===
+lab | air-gap rows between row 0 and the lab row: 1: 0, 2: 1, 3: 2, 4: 2, 5: 3
+Calls to fully charge one server = 100 / (((cha+500)/(200*difficulty+1000)) * 1% * threads); each call takes 6 s regardless of threads.
+cha 300, server difficulty 5, 1 thread(s): 250 calls = 25.0 min
+cha 1000, server difficulty 10, 1 thread(s): 200 calls = 20.0 min
+cha 1000, server difficulty 10, 50 thread(s): 4 calls = 24 s
+cha 3000, server difficulty 24, 1 thread(s): 166 calls = 16.6 min
+cha 3000, server difficulty 24, 100 thread(s): 2 calls = 12 s
