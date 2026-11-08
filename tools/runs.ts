@@ -133,7 +133,8 @@ export type Rollbacks = { readonly seen: readonly Seen[]; readonly watchedMs: nu
 /** The words for what the watcher saw of a run. Never "none" unless it was attached. */
 export function rollbackText(r: Rollbacks): string {
   if (r === null) return "rollbacks unobserved";
-  const watched = `watched ${formatDuration(r.watchedMs)} of ${formatDuration(r.runMs)}`;
+  // Reads after the run's last heartbeat watched nothing new: never claim more than the run.
+  const watched = `watched ${formatDuration(Math.min(r.watchedMs, r.runMs))} of ${formatDuration(r.runMs)}`;
   if (r.seen.length === 0) return `rollbacks: none seen, ${watched}`;
   return `rollbacks: ${r.seen.length} (${r.seen.map((s) => s.milestone).join(", ")}), ${watched}`;
 }

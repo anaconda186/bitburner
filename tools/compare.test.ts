@@ -224,6 +224,15 @@ describe("rollbacks in the report", () => {
     expect(lineOf(lines, "bn2.1:x")).toMatch(/^bn2\.1:x\s+1:40:00\s+gap.*rolled back in A/);
   });
 
+  test("never claim more watching than the run's recorded length", () => {
+    // The watcher kept reading for a minute after the last heartbeat it was given.
+    let watch: WatchLog | null = null;
+    const r = run({ splits });
+    for (let m = 0; m <= 121; m++) watch = watchState(watch, r.state, T0 + m * MIN);
+    const lines = text({ ...r, watch }, run({ splits }));
+    expect(lines.find((l) => l.startsWith("A rollbacks"))).toMatch(/watched 2:00:00 of 2:00:00/);
+  });
+
   test("say none seen, with how long it watched, when the watcher saw none", () => {
     let watch: WatchLog | null = null;
     const r = run({ splits });
