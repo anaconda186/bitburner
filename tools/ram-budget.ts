@@ -116,6 +116,12 @@ export const RAM_BUDGETS: BudgetTable = {
   // 0.1, hasTorRouter 0.05: 27.25, a hair over in the float sum. Must fit 32
   // GB (tools/ram-budget.test.ts). Only BN1.1 runs it.
   "sr/h/driver.js": { budget: 27.3, contexts: ["BN1.1"] },
+  // #55: the casino, on a 64 GB cloud server (later home). The only script
+  // that names window: base 1.6, window 25, document 25 (through sr/ui.js),
+  // exec 1.3, getMoneySources 1, getPlayer 0.5, getServerMoneyAvailable 0.1,
+  // isRunning 0.1: 54.6, a hair over in the float sum. Must fit 64 GB
+  // (tools/ram-budget.test.ts). Every reset of every hacking-finish BitNode.
+  "sr/h/casino.js": { budget: 54.65, contexts: EVERYWHERE },
   "sr/j/hack.js": { budget: 1.75, contexts: EVERYWHERE },
   "sr/j/grow.js": { budget: 1.75, contexts: EVERYWHERE },
   "sr/j/weaken.js": { budget: 1.75, contexts: EVERYWHERE },
