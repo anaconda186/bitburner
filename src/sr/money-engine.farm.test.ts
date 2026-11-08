@@ -8,7 +8,7 @@ import { describe, expect, test } from "vitest";
 import { fleet, player, ramOf, simulate, T0, type Landing } from "../../test/engine-sim.ts";
 import { hackExp, hackTimeMs, NEUTRAL_MULTS } from "./formulas.ts";
 import {
-  ENGINE_TUNABLES, GROW_JOB, HACK_JOB, schedule, SPLIT_MONEY, WEAKEN_JOB, type EngineOrders, type EngineSnapshot, type Job, type RamSplit, type TargetView,
+  ENGINE_TUNABLES, GROW_JOB, HACK_JOB, schedule, SHARE_JOB, SPLIT_MONEY, WEAKEN_JOB, type EngineOrders, type EngineSnapshot, type Job, type RamSplit, type TargetView,
 } from "./money-engine.ts";
 
 const orders = (split: RamSplit): EngineOrders => ({ split, homeReserveGb: 0, mults: NEUTRAL_MULTS });
@@ -112,6 +112,28 @@ describe("the exp farm", () => {
     const hacks = farmLandings(run2.landings).filter((l) => l.job.script === HACK_JOB);
     expect(hacks.length).toBeGreaterThan(50);
     for (const h of hacks) expect(h.security).toBeLessThanOrEqual(5.004 + 1e-9);
+  });
+});
+
+describe("share (spec #41 user story 62: about 25% share while working for rep)", () => {
+  test("the share part runs share jobs (10 s each, launched again as they end) on that part of the RAM, the rest farming exp", () => {
+    const split = { money: 0, exp: 0.75, sharing: 0.25 };
+    const hosts = fleet(4, 1024);
+    const run = simulate({ hosts, targets: [joesguns()], seconds: 120, orders: orders(split), player: P300 });
+    const shares = run.launched.filter((j) => j.script === SHARE_JOB);
+    expect(shares.length).toBeGreaterThan(0);
+    for (const j of shares) {
+      expect(j.purpose).toBe("sharing");
+      // ns.share() takes 10 s (src/NetworkShare/Share.ts ShareBonusTime).
+      expect(j.landsAtMs - j.launchedAtMs).toBe(10_000);
+    }
+    const pool = 4 * 1024;
+    for (let ms = T0 + 20_000; ms < T0 + 120_000; ms += 1_000) {
+      const held = ramOf(shares.filter((j) => j.launchedAtMs <= ms && j.landsAtMs > ms));
+      expect(held).toBeLessThanOrEqual(0.25 * pool + 1e-6);
+      expect(held).toBeGreaterThan(0.2 * pool);
+    }
+    expect(run.launched.some((j) => j.purpose === "farm")).toBe(true);
   });
 });
 

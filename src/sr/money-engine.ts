@@ -19,17 +19,22 @@ import { pickMults } from "./node-mults.ts";
 export const HACK_JOB = "sr/j/hack.js";
 export const GROW_JOB = "sr/j/grow.js";
 export const WEAKEN_JOB = "sr/j/weaken.js";
-export type JobScript = typeof HACK_JOB | typeof GROW_JOB | typeof WEAKEN_JOB;
+/** One 10-second share call (#58). */
+export const SHARE_JOB = "sr/j/share.js";
+export type JobScript = typeof HACK_JOB | typeof GROW_JOB | typeof WEAKEN_JOB | typeof SHARE_JOB;
+/** How long a share call lasts (src/NetworkShare/Share.ts ShareBonusTime). */
+export const SHARE_MS = 10_000;
 
 /**
  * GB per thread of each job script: base 1.6 plus its one call (hack 0.1, grow
- * and weaken 0.15). src/sr/money-engine.ram.test.ts checks them against the
+ * and weaken 0.15, share 2.4). src/sr/money-engine.ram.test.ts checks them against the
  * game's own RAM calculator.
  */
 export const JOB_RAM_GB: Readonly<Record<JobScript, number>> = {
   [HACK_JOB]: 1.7,
   [GROW_JOB]: 1.75,
   [WEAKEN_JOB]: 1.75,
+  [SHARE_JOB]: 4,
 };
 
 /**
@@ -181,7 +186,8 @@ export function schedule(s: EngineSnapshot, orders: EngineOrders, t: EngineTunab
   const { free, poolGb } = ramLedger(s, orders);
   const money = moneyJobs(s, free, orders.split.money * poolGb, t);
   const farmed = farmJobs(s, free, orders.split.exp * poolGb, money.busy, t);
-  return [...money.jobs, ...farmed];
+  const shared = shareJobs(s, free, orders.split.sharing * poolGb);
+  return [...money.jobs, ...farmed, ...shared];
 }
 
 /** RAM the engine's jobs for these purposes hold now (one past its landing is counted gone, as in `ramLedger`). */
@@ -414,6 +420,8 @@ function landed(t: TargetView, st: TargetState, j: Job, s: EngineSnapshot): Targ
       };
     case WEAKEN_JOB:
       return { money: st.money, security: Math.max(t.minDifficulty, st.security + j.securityRise) };
+    case SHARE_JOB:
+      return st;
   }
 }
 
@@ -786,6 +794,7 @@ type Part = {
 function durationMs(script: JobScript, t: TargetView, s: EngineSnapshot): number {
   if (script === HACK_JOB) return hackTimeMs(t, s.player, s.mults);
   if (script === GROW_JOB) return growTimeMs(t, s.player, s.mults);
+  if (script === SHARE_JOB) return SHARE_MS;
   return weakenTimeMs(t, s.player, s.mults);
 }
 
@@ -995,6 +1004,31 @@ export function outlook(s: EngineSnapshot, orders: EngineOrders, tun: EngineTuna
   const twice = best(2 * poolGb);
   if (now === undefined || twice === undefined) return undefined;
   return { target: now.host, poolGb, incomePerSec: now.income, incomeAt2xPerSec: Math.max(now.income, twice.income) };
+}
+
+/**
+ * The share part of the split (#58): share jobs, one 10-second ns.share()
+ * each, filling what that part has free, roomiest host first. They end
+ * within 10 s, so the next loops launch them again and a split change
+ * reaches them within 10 s. Share has no target ("").
+ */
+function shareJobs(s: EngineSnapshot, free: Map<string, number>, sharePoolGb: number): Job[] {
+  let budgetGb = sharePoolGb - heldFor(s, ["sharing"]);
+  const perThread = JOB_RAM_GB[SHARE_JOB];
+  const jobs: Job[] = [];
+  for (;;) {
+    const host = roomiest(free);
+    if (host === undefined) break;
+    const threads = Math.floor((Math.min(free.get(host) ?? 0, budgetGb) + RAM_EPSILON) / perThread);
+    if (threads < 1) break;
+    jobs.push({
+      script: SHARE_JOB, host, target: "", threads, additionalMsec: 0, purpose: "sharing",
+      launchedAtMs: s.nowMs, landsAtMs: s.nowMs + SHARE_MS, steal: 0, securityRise: 0,
+    });
+    free.set(host, (free.get(host) ?? 0) - threads * perThread);
+    budgetGb -= threads * perThread;
+  }
+  return jobs;
 }
 
 /** The host with the most free RAM (ties by name). */

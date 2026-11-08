@@ -119,4 +119,6 @@ export const RAM_BUDGETS: BudgetTable = {
   "sr/j/hack.js": { budget: 1.75, contexts: EVERYWHERE },
   "sr/j/grow.js": { budget: 1.75, contexts: EVERYWHERE },
   "sr/j/weaken.js": { budget: 1.75, contexts: EVERYWHERE },
+  // #58: the share job, base 1.6 plus share 2.4. JOB_RAM_GB holds the same.
+  "sr/j/share.js": { budget: 4.0, contexts: EVERYWHERE },
 };

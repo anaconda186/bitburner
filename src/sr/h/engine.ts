@@ -28,6 +28,7 @@ import {
   outlook,
   readOrders,
   schedule,
+  SHARE_JOB,
   stillInFlight,
   WEAKEN_JOB,
   type EngineOrders,
@@ -56,7 +57,7 @@ export type EngineNews = {
 };
 
 const TICK_MS = 500;
-const JOB_SCRIPTS = [HACK_JOB, GROW_JOB, WEAKEN_JOB];
+const JOB_SCRIPTS = [HACK_JOB, GROW_JOB, WEAKEN_JOB, SHARE_JOB];
 
 function isScriptDeath(e: unknown): boolean {
   return e instanceof Error && e.name === "ScriptDeath";
