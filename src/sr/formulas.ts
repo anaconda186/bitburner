@@ -17,7 +17,7 @@
 // formulas.test.ts prices every export.
 
 /** The BitNode multipliers these formulas read (src/BitNode/BitNodeMultipliers.ts). */
-export interface NodeMults {
+export type NodeMults = {
   HackExpGain: number;
   HackingLevelMultiplier: number;
   HackingSpeedMultiplier: number;
@@ -27,7 +27,7 @@ export interface NodeMults {
   CloudServerCost: number;
   CloudServerSoftcap: number;
   CloudServerMaxRam: number;
-}
+};
 
 /** Every multiplier at 1, as in BN1. */
 export const NEUTRAL_MULTS: Readonly<NodeMults> = {

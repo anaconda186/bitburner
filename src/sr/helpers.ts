@@ -11,7 +11,9 @@
 //   - a long-lived worker (it keeps running and reports on its own port)
 //     goes in WORKERS.
 
+import type { NodeMults } from "./formulas.ts";
 import type { Reply } from "./helper-contract.ts";
+import { multsReadable } from "./node-mults.ts";
 import type { RouteFacts } from "./order.ts";
 import type { ResetTimes } from "./state.ts";
 
@@ -44,7 +46,28 @@ export interface ProbeValues {
   sleeves: { readonly count: number };
   /** Whether the TIX API, which every stock call needs, is owned (#72: the BN8 trader waits for it). */
   market: { readonly hasTixApi: boolean };
+  /**
+   * The cloud servers owned now and their RAM, how many the BitNode allows,
+   * the most RAM one can have, and the money on hand (#57: the fleet rule).
+   */
+  fleet: FleetFacts;
+  /**
+   * The BitNode multipliers the formulas read (#57), from
+   * getBitNodeMultipliers. Only launched where that works (SF5 or BN5), and
+   * only until it has read once: they change only at a reset.
+   */
+  bitnode: NodeMults;
 }
+
+/** One cloud server as the fleet probe reads it. */
+export type CloudServer = { readonly host: string; readonly ramGb: number };
+
+export type FleetFacts = {
+  readonly servers: readonly CloudServer[];
+  readonly limit: number;
+  readonly ramLimitGb: number;
+  readonly money: number;
+};
 
 export type ProbeName = keyof ProbeValues;
 
@@ -57,6 +80,8 @@ export interface ProbeSpec {
   readonly maxAgeMs: number;
   /** Launch it only while this holds; without it, always. */
   readonly onlyIf?: (readings: Readings) => boolean;
+  /** Launch it again as soon as one of these action helpers has run since its last reading. */
+  readonly afterCalls?: readonly HelperScript[];
 }
 
 /** Sleeves exist in BN10 and wherever SF10 is owned; elsewhere their API throws. */
@@ -80,6 +105,15 @@ export const PROBES: { readonly [P in ProbeName]: ProbeSpec } = {
   },
   // Changes when TIX is bought (or at a reset, which restarts the conductor).
   market: { script: "sr/h/market.js", maxAgeMs: 30_000 },
+  // #57: read again right after each purchase, so the next one is decided
+  // on the fleet and money as they are now.
+  fleet: { script: "sr/h/fleet.js", maxAgeMs: 10_000, afterCalls: ["sr/h/buy-server.js", "sr/h/upgrade-server.js"] },
+  // #57: 5.6 GB, once per conductor (a reset restarts it); retried after a failure.
+  bitnode: {
+    script: "sr/h/bitnode.js",
+    maxAgeMs: 60_000,
+    onlyIf: (readings) => readings.route?.ok === true && multsReadable(readings.route.value) && readings.bitnode?.ok !== true,
+  },
 };
 
 /** Action helpers, by name. Launched one at a time and awaited. */
@@ -87,6 +121,11 @@ export const CALLS: Readonly<Record<string, HelperScript>> = {
   // #53: opens every port it has the program for and NUKEs, on each server
   // named in its argument ({ hosts }). Replies { rooted: string[] }.
   root: "sr/h/root.js",
+  // #54/#57: buys one cloud server, { host, ram }. Replies the hostname.
+  buyServer: "sr/h/buy-server.js",
+  // #57: doubles one cloud server's RAM, { host, ram }. Replies the hostname.
+  // (Not called upgradeServer: that is charged as ns.cloud.upgradeServer.)
+  fleetUpgrade: "sr/h/upgrade-server.js",
 };
 
 /**

@@ -20,7 +20,7 @@ const target = (host: string, over: Partial<TargetView> = {}): TargetView => ({
   moneyAvailable: 2e6,
   ...over,
 });
-const ORDERS: EngineOrders = { split: SPLIT_MONEY, homeReserveGb: 0 };
+const ORDERS: EngineOrders = { split: SPLIT_MONEY, homeReserveGb: 0, mults: NEUTRAL_MULTS };
 
 /** The engine on a big empty server, level 100, one target. */
 function snap(over: Partial<EngineSnapshot> = {}): EngineSnapshot {
@@ -51,13 +51,13 @@ const ramOf = (jobs: readonly Job[]) => jobs.reduce((gb, j) => gb + j.threads * 
 
 describe("the RAM split", () => {
   test("off launches nothing", () => {
-    expect(schedule(snap(), { split: SPLIT_OFF, homeReserveGb: 0 })).toEqual([]);
+    expect(schedule(snap(), { split: SPLIT_OFF, homeReserveGb: 0, mults: NEUTRAL_MULTS })).toEqual([]);
   });
 
   test("a money fraction caps the RAM drain jobs take: half of 100 GB is 29 hack threads", () => {
     // 50 GB / 1.7 GB = 29.4 threads.
     const s = snap({ hosts: [{ host: "big", maxRamGb: 100, usedRamGb: 0 }] });
-    const jobs = schedule(s, { split: { money: 0.5, exp: 0.5, sharing: 0 }, homeReserveGb: 0 });
+    const jobs = schedule(s, { split: { money: 0.5, exp: 0.5, sharing: 0 }, homeReserveGb: 0, mults: NEUTRAL_MULTS });
     expect(jobs.reduce((n, j) => n + j.threads, 0)).toBe(29);
   });
 
@@ -69,7 +69,7 @@ describe("the RAM split", () => {
       landsAtMs: NOW + 5_000, steal: 0.1, securityRise: 0.04,
     };
     const s = snap({ hosts: [{ host: "big", maxRamGb: 100, usedRamGb: 34 }], inFlight: [held] });
-    const jobs = schedule(s, { split: { money: 0.5, exp: 0, sharing: 0 }, homeReserveGb: 0 });
+    const jobs = schedule(s, { split: { money: 0.5, exp: 0, sharing: 0 }, homeReserveGb: 0, mults: NEUTRAL_MULTS });
     expect(jobs.reduce((n, j) => n + j.threads, 0)).toBe(9);
     expect(ramOf(jobs)).toBeLessThanOrEqual(16);
   });
@@ -165,7 +165,7 @@ describe("never over the RAM it is given", () => {
       );
       const money = Math.round(rand() * 10) / 10;
       const s = snap({ hosts, targets, player: player(1 + Math.floor(rand() * 300)) });
-      const jobs = schedule(s, { split: { money, exp: 1 - money, sharing: 0 }, homeReserveGb: 0 });
+      const jobs = schedule(s, { split: { money, exp: 1 - money, sharing: 0 }, homeReserveGb: 0, mults: NEUTRAL_MULTS });
       const pool = hosts.reduce((gb, h) => gb + h.maxRamGb - h.usedRamGb, 0);
       expect(ramOf(jobs)).toBeLessThanOrEqual(money * pool + 1e-6);
       for (const h of hosts) {
@@ -194,7 +194,7 @@ describe("home", () => {
       ],
       inFlight,
     });
-  const reserve = (homeReserveGb: number): EngineOrders => ({ split: SPLIT_MONEY, homeReserveGb });
+  const reserve = (homeReserveGb: number): EngineOrders => ({ split: SPLIT_MONEY, homeReserveGb, mults: NEUTRAL_MULTS });
   const onHome = (jobs: readonly Job[]) => jobs.filter((j) => j.host === "home").reduce((n, j) => n + j.threads, 0);
 
   test("keeps the reserve free on home for probes and action helpers", () => {
@@ -234,7 +234,7 @@ describe("home", () => {
 
 describe("the control port", () => {
   test("reads the orders the conductor wrote", () => {
-    const orders = { split: { money: 0.75, exp: 0, sharing: 0.25 }, homeReserveGb: 2.6 };
+    const orders = { split: { money: 0.75, exp: 0, sharing: 0.25 }, homeReserveGb: 2.6, mults: { ...NEUTRAL_MULTS, ScriptHackMoney: 0.2 } };
     expect(readOrders(structuredClone(orders))).toEqual(orders);
   });
 
@@ -248,7 +248,9 @@ describe("the control port", () => {
       { split: { money: 1, exp: 0 }, homeReserveGb: 0 },
       { split: { money: 0.8, exp: 0.4, sharing: 0 }, homeReserveGb: 0 },
       { split: { money: -1, exp: 0, sharing: 0 }, homeReserveGb: 0 },
-      { split: SPLIT_MONEY, homeReserveGb: -1 },
+      { split: SPLIT_MONEY, homeReserveGb: -1, mults: NEUTRAL_MULTS },
+      { split: SPLIT_MONEY, homeReserveGb: 0 },
+      { split: SPLIT_MONEY, homeReserveGb: 0, mults: { ...NEUTRAL_MULTS, ScriptHackMoney: "x" } },
       { split: { money: Number.NaN, exp: 0, sharing: 0 }, homeReserveGb: 0 },
     ]) {
       expect(readOrders(raw)).toEqual(ORDERS_OFF);

@@ -11,7 +11,10 @@ import type { Json, Reply, WorkerReport } from "./helper-contract.ts";
 import {
   CALLS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeSpec, type ProbeValues, type WorkerName, type WorkerSpec,
 } from "./helpers.ts";
+import { fleetWant } from "./fleet.ts";
+import type { NodeMults } from "./formulas.ts";
 import { ORDERS_OFF, readOrders, SPLIT_MONEY, type EngineOrders } from "./money-engine.ts";
+import { nodeMults } from "./node-mults.ts";
 
 /** The latest reply of one probe and when the conductor read it. */
 export type ProbeReading<T> = Reply<T> & { readonly atMs: number };
@@ -80,6 +83,8 @@ export function decide(snapshot: Snapshot): readonly Action[] {
   const wants: Want[] = staleProbes(snapshot).map((name) => ({ kind: "probe", name }));
   const rooting = rootWant(snapshot);
   if (rooting !== undefined) wants.push(rooting);
+  const purchase = fleetWant(snapshot);
+  if (purchase !== undefined) wants.push(purchase);
   wants.push(...engineWants(snapshot));
   if (traderWanted(snapshot) && startDue(snapshot.workers.trader, snapshot.nowMs)) {
     wants.push({ kind: "start", worker: "trader", arg: null });
@@ -126,14 +131,19 @@ export function homeReserveGb(s: Snapshot): number {
 export function engineOrders(s: Snapshot): EngineOrders {
   const route = s.probes.route;
   if (route?.ok !== true || route.value.currentNode === 8) return ORDERS_OFF;
-  return { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s) };
+  const reading = s.probes.bitnode;
+  return { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s), mults: nodeMults(route.value, reading?.ok ? reading.value : undefined) };
 }
+
+const sameMults = (a: NodeMults, b: NodeMults): boolean =>
+  (Object.keys(a) as (keyof NodeMults)[]).every((k) => a[k] === b[k]);
 
 const sameOrders = (a: EngineOrders, b: EngineOrders): boolean =>
   a.homeReserveGb === b.homeReserveGb &&
   a.split.money === b.split.money &&
   a.split.exp === b.split.exp &&
-  a.split.sharing === b.split.sharing;
+  a.split.sharing === b.split.sharing &&
+  sameMults(a.mults, b.mults);
 
 /**
  * The money engine: its orders go on its control port whenever the port reads
@@ -238,6 +248,9 @@ function staleProbes(s: Snapshot): ProbeName[] {
     const spec = PROBES[name];
     if (spec.onlyIf !== undefined && !spec.onlyIf(s.probes)) return false;
     const reading = s.probes[name];
-    return reading === undefined || s.nowMs - reading.atMs >= spec.maxAgeMs;
+    if (reading === undefined || s.nowMs - reading.atMs >= spec.maxAgeMs) return true;
+    // Read again at once after an action helper that changes what it reads.
+    const last = s.lastCall;
+    return last !== undefined && spec.afterCalls?.includes(last.script) === true && last.atMs >= reading.atMs;
   });
 }

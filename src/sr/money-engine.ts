@@ -9,7 +9,8 @@
 // RAM: the engine and the conductor import this file, and the game charges any
 // identifier named like an NS function. Never name anything here hack, grow,
 // weaken, share, run, exec, scan or probe; strings ("hack") are free.
-import { hackChance, hackFraction, hackSecurityRise, hackTimeMs, type HackTarget, type Hacker, type NodeMults } from "./formulas.ts";
+import { hackChance, hackFraction, hackSecurityRise, hackTimeMs, NEUTRAL_MULTS, type HackTarget, type Hacker, type NodeMults } from "./formulas.ts";
+import { pickMults } from "./node-mults.ts";
 
 /** The job scripts, one NS call each (src/sr/j/). */
 export const HACK_JOB = "sr/j/hack.js";
@@ -41,10 +42,15 @@ export type EngineOrders = {
   readonly split: RamSplit;
   /** RAM on home the engine never fills, so probes and action helpers still fit there. */
   readonly homeReserveGb: number;
+  /**
+   * The BitNode multipliers in force (#57): the engine can't read them itself
+   * (getBitNodeMultipliers needs SF5 and 4 GB), so the conductor sends them.
+   */
+  readonly mults: NodeMults;
 };
 
 /** No RAM for anything; what an empty or garbled control port means. */
-export const ORDERS_OFF: EngineOrders = { split: SPLIT_OFF, homeReserveGb: 0 };
+export const ORDERS_OFF: EngineOrders = { split: SPLIT_OFF, homeReserveGb: 0, mults: NEUTRAL_MULTS };
 
 const isShare = (x: unknown): x is number => typeof x === "number" && x >= 0 && x <= 1;
 
@@ -55,12 +61,37 @@ const isShare = (x: unknown): x is number => typeof x === "number" && x >= 0 && 
  */
 export function readOrders(raw: unknown): EngineOrders {
   if (typeof raw !== "object" || raw === null) return ORDERS_OFF;
-  const { split, homeReserveGb } = raw as { split?: unknown; homeReserveGb?: unknown };
+  const { split, homeReserveGb, mults: rawMults } = raw as { split?: unknown; homeReserveGb?: unknown; mults?: unknown };
   if (typeof split !== "object" || split === null) return ORDERS_OFF;
   const { money, exp, sharing } = split as Record<string, unknown>;
   if (!isShare(money) || !isShare(exp) || !isShare(sharing) || money + exp + sharing > 1 + RAM_EPSILON) return ORDERS_OFF;
   if (typeof homeReserveGb !== "number" || !(homeReserveGb >= 0)) return ORDERS_OFF;
-  return { split: { money, exp, sharing }, homeReserveGb };
+  const mults = pickMults(rawMults);
+  if (mults === undefined) return ORDERS_OFF;
+  return { split: { money, exp, sharing }, homeReserveGb, mults };
+}
+
+/**
+ * What the engine expects its RAM to earn (#57), for the fleet rule's
+ * payback: modelled steady batch income on its target at today's level, on
+ * the RAM it has (`poolGb`) and on twice that. The difference over `poolGb`
+ * is what one more GB earns, at most (income per GB falls as RAM grows).
+ */
+export type EngineOutlook = {
+  readonly target: string;
+  readonly poolGb: number;
+  readonly incomePerSec: number;
+  readonly incomeAt2xPerSec: number;
+};
+
+const isAmount = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x >= 0;
+
+/** An outlook from the engine's report, or undefined if it isn't one. */
+export function readOutlook(raw: unknown): EngineOutlook | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const { target, poolGb, incomePerSec, incomeAt2xPerSec } = raw as Record<string, unknown>;
+  if (typeof target !== "string" || !isAmount(poolGb) || !isAmount(incomePerSec) || !isAmount(incomeAt2xPerSec)) return undefined;
+  return { target, poolGb, incomePerSec, incomeAt2xPerSec };
 }
 
 /** A job is dropped from the in-flight book this long after it should have landed (timers only fire late). */

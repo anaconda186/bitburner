@@ -92,6 +92,18 @@ export const RAM_BUDGETS: BudgetTable = {
   // the ports are free. No field may be called share (ns.share, 2.4): the
   // split's share part is `sharing`.
   "sr/h/engine.js": { budget: 4.65, contexts: EVERYWHERE },
+  // #57 (shared with #54): the buy-server action helper. Base 1.6,
+  // cloud.purchaseServer 2.25.
+  "sr/h/buy-server.js": { budget: 3.85, contexts: EVERYWHERE },
+  // #57: the upgrade-server action helper. Base 1.6, cloud.upgradeServer 0.25.
+  "sr/h/upgrade-server.js": { budget: 1.85, contexts: EVERYWHERE },
+  // #57: the fleet probe. Base 1.6, cloud.getServerNames 1.05,
+  // getServerMaxRam 0.05, cloud.getServerLimit and getRamLimit 0.05 each,
+  // getServerMoneyAvailable 0.1.
+  "sr/h/fleet.js": { budget: 2.9, contexts: EVERYWHERE },
+  // #57: the BitNode multipliers probe. Base 1.6, getBitNodeMultipliers 4.
+  // Launched only with SF5 or in BN5, but priced the same everywhere.
+  "sr/h/bitnode.js": { budget: 5.6, contexts: EVERYWHERE },
   // #53: the job scripts the engine execs, one call each on top of the base
   // 1.6 (hack 0.1, grow and weaken 0.15). hack's 1.70 is a hair over in the
   // float sum, hence 1.75 for all three. JOB_RAM_GB in src/sr/money-engine.ts
