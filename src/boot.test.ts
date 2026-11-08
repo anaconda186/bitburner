@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
+  CASINO_HOSTS,
+  CASINO_SCRIPT,
+  casinoIsRunning,
   filesToFetch,
   parseBootArgs,
   parseManifest,
@@ -10,6 +13,7 @@ import {
   STATE_FILE as BOOT_STATE_FILE,
   stateOnBoot,
 } from "./boot.ts";
+import { WORKERS } from "./sr/helpers.ts";
 import { CATEGORIES, parseState, STATE_FILE } from "./sr/state.ts";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -125,6 +129,25 @@ describe("runIsLive: what a boot sees on home", () => {
 
   test("other scripts on home do not count", () => {
     expect(runIsLive([proc("sr/casino.js", 2), proc("sr/x.js", 1), proc("boot.js", me)], me)).toBe(false);
+  });
+});
+
+describe("casinoIsRunning: boot's casino check", () => {
+  const proc = (filename: string, pid: number) => ({ filename, pid });
+
+  test("boot looks where the casino can run: home and its cloud server, as the registry says", () => {
+    expect(CASINO_SCRIPT).toBe(WORKERS.casino.script);
+    expect(CASINO_HOSTS).toEqual(["home", WORKERS.casino.host]);
+  });
+
+  test("the casino on any host looked at means it is running", () => {
+    expect(casinoIsRunning([[proc("boot.js", 9)], [proc("sr/h/casino.js", 4)]])).toBe(true);
+    expect(casinoIsRunning([[proc("sr/h/casino.js", 4), proc("boot.js", 9)], []])).toBe(true);
+  });
+
+  test("no casino anywhere, or only other scripts, means a normal boot", () => {
+    expect(casinoIsRunning([[proc("boot.js", 9)], []])).toBe(false);
+    expect(casinoIsRunning([[proc("sr/h/engine.js", 3)], [proc("sr/j/hack.js", 5)]])).toBe(false);
   });
 });
 

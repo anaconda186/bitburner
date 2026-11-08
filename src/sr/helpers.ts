@@ -176,9 +176,11 @@ export const WORKERS = {
   driver: { script: "sr/h/driver.js", port: 4, control: 5, files: ["sr/driver-jobs.js", "sr/ui.js"], host: "sr-00" },
   // #55: the casino (UI automation, Open only), the one non-temporary run
   // script: it comes back by itself after each of its reloads. Its argument
-  // is { category }; its report is CasinoNews (`blackjack.ts`). Where and
-  // when it runs is decide's (#56).
-  casino: { script: "sr/h/casino.js", port: 6, files: ["sr/blackjack.js", "sr/ui.js"], survivesReload: true },
+  // is { category }; its report is CasinoNews (`blackjack.ts`). #56: its
+  // host is the 64 GB cloud server sr-01 (the second one the run buys, after
+  // the driver's sr-00), or home once home has 128 GB (decide pins that start
+  // to home). boot.js keeps copies of the script and both hosts.
+  casino: { script: "sr/h/casino.js", port: 6, files: ["sr/blackjack.js", "sr/ui.js"], survivesReload: true, host: "sr-01" },
 } as const satisfies Record<string, WorkerSpec>;
 
 export type WorkerName = keyof typeof WORKERS;

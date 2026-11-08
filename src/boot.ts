@@ -4,7 +4,9 @@
 //
 //   1. If the conductor or an earlier boot.js is running on home, print "run
 //      already live" and exit, touching nothing. Then read the one argument,
-//      `--category <name>`.
+//      `--category <name>`. If the casino is running (on home or its cloud
+//      server, #56), skip steps 2 and 3: the conductor starts from the files
+//      already on home, so a build can't change mid-casino.
 //   2. Fetch manifest.json from the `release` branch (the one mutable URL).
 //   3. Hash every listed file already on home; fetch only those whose sha256
 //      differs from the manifest's, from URLs pinned to the manifest's release
@@ -114,6 +116,23 @@ export function runIsLive(processes: readonly { filename: string; pid: number }[
   return processes.some((p) => p.filename === CONDUCTOR || (p.filename === BOOT && p.pid < selfPid));
 }
 
+/**
+ * The casino (WORKERS.casino in sr/helpers.ts, copied: this file may import
+ * nothing) and the hosts it can run on: home once home has 128 GB, else its
+ * own cloud server. `src/boot.test.ts` checks both against the registry.
+ */
+export const CASINO_SCRIPT = "sr/h/casino.js";
+export const CASINO_HOSTS = ["home", "sr-01"];
+
+/**
+ * Whether the casino is running, from the process lists of CASINO_HOSTS. If
+ * it is, boot fetches nothing: a build can't change mid-casino (spec #41
+ * story 18), and each of the casino's reloads stays quick.
+ */
+export function casinoIsRunning(processLists: readonly (readonly { filename: string }[])[]): boolean {
+  return processLists.some((list) => list.some((p) => p.filename === CASINO_SCRIPT));
+}
+
 /** A copy of sr/state.ts's CATEGORIES, since this file may import nothing. */
 const CATEGORIES = ["open", "strict"];
 const CATEGORY_LIST = `(${CATEGORIES.join(", ")})`;
@@ -205,11 +224,28 @@ async function hashesOnHome(ns: NS, manifest: Manifest): Promise<Record<string, 
   return hashes;
 }
 
+/**
+ * The process list of each of CASINO_HOSTS. `ps` is already paid for (the
+ * live guard), so this costs no RAM; a cloud server that doesn't exist (not
+ * bought yet, or gone at a reset) throws, and lists nothing.
+ */
+function casinoHostProcesses(ns: NS, home: readonly { filename: string }[]): (readonly { filename: string }[])[] {
+  return CASINO_HOSTS.map((host) => {
+    if (host === "home") return home;
+    try {
+      return ns.ps(host);
+    } catch {
+      return [];
+    }
+  });
+}
+
 export async function main(ns: NS): Promise<void> {
   ns.disableLog("ALL");
   const bootMs = Date.now();
   // First: never disturb a live run (a retype, or autoexec racing the human).
-  if (runIsLive(ns.ps("home"), ns.pid)) {
+  const home = ns.ps("home");
+  if (runIsLive(home, ns.pid)) {
     ns.tprint("boot: run already live");
     return;
   }
@@ -218,6 +254,24 @@ export async function main(ns: NS): Promise<void> {
     ns.tprint("ERROR " + asked.error);
     return;
   }
+  // Mid-casino (a reload between hands): nothing fetched, home's files as they are.
+  let source: string;
+  if (casinoIsRunning(casinoHostProcesses(ns, home))) {
+    const local = parseManifest(ns.read(MANIFEST_FILE));
+    source = local.ok ? local.manifest.source : "";
+    ns.tprint(`boot: the casino is running; build ${source.slice(0, 7)} kept, nothing fetched`);
+  } else {
+    source = await fetchBuild(ns);
+  }
+  const runState = stateOnBoot(ns.read(STATE_FILE), asked.category, source, bootMs);
+  if (runState.warning !== null) ns.tprint(runState.warning);
+  if (runState.create !== null) ns.write(STATE_FILE, runState.create, "w");
+  // preventDuplicates: a last line of defence behind the live-run guard above.
+  ns.spawn(CONDUCTOR, { spawnDelay: 0, temporary: true, preventDuplicates: true });
+}
+
+/** Brings home up to the release; returns the build's source commit. */
+async function fetchBuild(ns: NS): Promise<string> {
   const manifest = await fetchManifest(ns);
   let fetched = 0;
   for (let failures = 1; ; failures++) {
@@ -235,9 +289,5 @@ export async function main(ns: NS): Promise<void> {
   }
   const total = Object.keys(manifest.files).length;
   ns.tprint(`boot: build ${manifest.source.slice(0, 7)} on home (${fetched} fetched, ${total - Math.min(fetched, total)} kept)`);
-  const runState = stateOnBoot(ns.read(STATE_FILE), asked.category, manifest.source, bootMs);
-  if (runState.warning !== null) ns.tprint(runState.warning);
-  if (runState.create !== null) ns.write(STATE_FILE, runState.create, "w");
-  // preventDuplicates: a last line of defence behind the live-run guard above.
-  ns.spawn(CONDUCTOR, { spawnDelay: 0, temporary: true, preventDuplicates: true });
+  return manifest.source;
 }
