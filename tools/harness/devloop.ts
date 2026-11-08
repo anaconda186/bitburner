@@ -109,9 +109,9 @@ export function startListener(
     if (milestone !== null && opts.capture !== false) {
       try {
         const where = await storeCapture(root, await api.getSaveFile(), new Date());
-        log(`dev: captured ${where.milestone} → ${where.dir}/${where.base}.gz`);
+        log(`listener: captured ${where.milestone} → ${where.dir}/${where.base}.gz`);
       } catch (e) {
-        log(`dev: could not capture ${milestone}: ${e instanceof Error ? e.message : String(e)}`);
+        log(`listener: could not capture ${milestone}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     return seen;

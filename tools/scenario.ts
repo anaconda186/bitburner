@@ -1,4 +1,4 @@
-// npm run scenario -- <milestone> [--until <milestone>] [--timeout 12h] [--headless] [--no-capture] [--build <dir>]
+// npm run scenario -- <milestone> [--until <milestone>] [--timeout 12h] [--headless] [--no-capture] [--build <dir>] [--root <dir>]
 //
 // A scenario test (#50): does the current build get the run from one
 // milestone save to the next milestone? Local only, never in Actions.
@@ -36,6 +36,8 @@ const POLL_MS = 5_000;
 
 export interface ScenarioOptions {
   repo: string;
+  /** Where saves/ and lab-saves/ are (default: the repo). */
+  root?: string;
   milestone: string;
   until?: string;
   timeoutMs: number;
@@ -51,7 +53,7 @@ export async function runScenario(o: ScenarioOptions): Promise<ScenarioVerdict> 
   const log = o.log ?? console.log;
   const failed = (...problems: string[]): ScenarioVerdict => ({ status: "failed", problems });
 
-  const start = await loadScenarioSave(o.repo, o.milestone);
+  const start = await loadScenarioSave(o.root ?? o.repo, o.milestone);
   if (!start.ok) return failed(start.error);
   const target = scenarioTarget(o.until, start.state, MILESTONES.map((m) => m.name));
   if (!target.ok) return failed(target.error);
@@ -73,7 +75,7 @@ export async function runScenario(o: ScenarioOptions): Promise<ScenarioVerdict> 
   let session: GameSession | undefined;
   // Polled by the loop below, not on a timer; it starts from the save's own
   // state, so a milestone the run reaches is a change it sees.
-  const listener = startListener(api, o.repo, { everyMs: 60 * 60_000, capture: o.capture, seen: start.state, log });
+  const listener = startListener(api, o.root ?? o.repo, { everyMs: 60 * 60_000, capture: o.capture, seen: start.state, log });
   try {
     session = await openBrowser(release, { headless: o.headless });
     const { page } = session;
@@ -131,15 +133,17 @@ if (import.meta.main) {
       headless: { type: "boolean", default: false },
       capture: { type: "boolean", default: true },
       build: { type: "string" },
+      root: { type: "string", default: "." },
       game: { type: "string", default: join(GAME_DIR, "app") },
     },
   });
   if (positionals.length !== 1) {
-    console.error("usage: npm run scenario -- <milestone> [--until <milestone>] [--timeout 12h] [--headless] [--no-capture] [--build <dir>]");
+    console.error("usage: npm run scenario -- <milestone> [--until <milestone>] [--timeout 12h] [--headless] [--no-capture] [--build <dir>] [--root <dir>]");
     process.exit(2);
   }
   const v = await runScenario({
     repo: resolve("."),
+    root: resolve(values.root),
     milestone: positionals[0]!,
     ...(values.until !== undefined ? { until: values.until } : {}),
     timeoutMs: parseDuration(values.timeout),

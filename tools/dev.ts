@@ -1,4 +1,4 @@
-// npm run dev [-- --port 12525] [--open new|<milestone>] [--lab <save.gz>] [--headless] [--no-capture]
+// npm run dev [-- --port 12525] [--open new|<milestone>] [--lab <save.gz>] [--headless] [--no-capture] [--root <dir>]
 //
 // The inner loop (#50), against the live game, with no release in between:
 // - Serves the Remote API on --port (default 12525, the game's own
@@ -10,7 +10,8 @@
 //   of the start command, or `kill` it and `run boot.js`).
 // - Captures a milestone save whenever the state file's milestone changes to
 //   a new one: saves/<milestone>.gz plus a sidecar (build, target version).
-//   A lab game's saves go to lab-saves/ instead. --no-capture turns it off.
+//   A lab game's saves go to lab-saves/ instead. --no-capture turns it off;
+//   --root puts saves/ and lab-saves/ somewhere other than the repo.
 // - --open opens the game in its own window (the harness's Chromium), with
 //   the raw GitHub URLs answered from the latest local build, so the start
 //   command and boot.js run it too: `new` for a new game (exit the tutorial
@@ -39,11 +40,14 @@ const { values } = parseArgs({
     game: { type: "string", default: join(GAME_DIR, "app") },
     headless: { type: "boolean", default: false },
     capture: { type: "boolean", default: true },
+    root: { type: "string", default: "." },
   },
   allowNegative: true,
 });
 
 const repo = resolve(".");
+/** Where saves/ and lab-saves/ go. */
+const root = resolve(values.root);
 const log = (line: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${line}`);
 const fail = (why: string): never => {
   console.error(`dev: ${why}`);
@@ -59,7 +63,7 @@ log(`dev: built ${files.size} files, source ${release.manifest.source}`);
 
 const api = await startRemoteApi("127.0.0.1", Number(values.port));
 log(`dev: Remote API on 127.0.0.1:${api.port}`);
-const listener = startListener(api, repo, { capture: values.capture, log });
+const listener = startListener(api, root, { capture: values.capture, log });
 
 // Pushes: the whole build to each new connection, then only changes.
 let pushed: Pushed | null = null;
@@ -116,7 +120,7 @@ if (values.open !== undefined || values.lab !== undefined) {
     await connectRemoteApi(page, api.port);
     log("dev: new game open; type the start command (twice on a fresh save)");
   } else {
-    const start = await loadScenarioSave(repo, values.open!);
+    const start = await loadScenarioSave(root, values.open!);
     if (!start.ok) fail(start.error);
     await resumeFromSave(session, game.url, api, (start as { bytes: Uint8Array }).bytes);
     log(`dev: resumed milestone save ${values.open}; start command typed once`);
