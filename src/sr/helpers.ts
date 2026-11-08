@@ -63,6 +63,8 @@ export interface ProbeValues {
 export type CloudServer = { readonly host: string; readonly ramGb: number };
 
 export type FleetFacts = {
+  /** When the probe read the game (Date.now() in the probe, not when the conductor collected it). */
+  readonly readAtMs: number;
   readonly servers: readonly CloudServer[];
   readonly limit: number;
   readonly ramLimitGb: number;
@@ -148,6 +150,8 @@ export interface WorkerSpec {
   readonly control?: number;
   /** Start it on home only with the home reserve still free beside it (`homeReserveGb` in decide.ts). */
   readonly homeHeadroom?: boolean;
+  /** Start it on this server and nowhere else (the driver on its own cloud server). */
+  readonly host?: string;
 }
 
 export const WORKERS = {
@@ -162,6 +166,9 @@ export const WORKERS = {
     files: ["sr/money-engine.js", "sr/formulas.js", "sr/node-mults.js"],
     homeHeadroom: true,
   },
+  // #54: the BN1.1 driver (UI automation) on its own 32 GB cloud server. Its
+  // jobs come over its control port (DriverOrder in `driver-jobs.ts`).
+  driver: { script: "sr/h/driver.js", port: 4, control: 5, files: ["sr/driver-jobs.js", "sr/ui.js"], host: "sr-00" },
 } as const satisfies Record<string, WorkerSpec>;
 
 export type WorkerName = keyof typeof WORKERS;

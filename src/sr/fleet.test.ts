@@ -11,9 +11,12 @@ const NOW = 1_700_000_000_000;
 const BUY = CALLS.buyServer!;
 const UPGRADE = CALLS.fleetUpgrade!;
 const reading = <T,>(value: T, atMs = NOW) => ({ ok: true, value, atMs }) as const;
-const route = (currentNode: number) => reading({ currentNode, ownedSF: {}, lastAugReset: NOW, lastNodeReset: NOW });
+/** BN1.2 unless told otherwise: past BN1.1, so no driver and sr-00 is a slot like any. */
+const route = (currentNode: number, ownedSF: Record<number, number> = { 1: 1 }) =>
+  reading({ currentNode, ownedSF, lastAugReset: NOW, lastNodeReset: NOW });
 type Server = { host: string; ramGb: number };
-const fleet = (servers: Server[], money = 1e12, limit = 25) => reading({ servers, limit, ramLimitGb: 1_048_576, money });
+const fleet = (servers: Server[], money = 1e12, limit = 25) =>
+  reading({ readAtMs: NOW, servers, limit, ramLimitGb: 1_048_576, money });
 
 /**
  * The engine's outlook: on a 1,000 GB pool it models $1m/s, and $1.8m/s on
@@ -21,7 +24,7 @@ const fleet = (servers: Server[], money = 1e12, limit = 25) => reading({ servers
  */
 const OUTLOOK = { target: "phantasy", poolGb: 1000, incomePerSec: 1e6, incomeAt2xPerSec: 1.8e6 };
 
-/** BN1, everything fresh, the engine running with its orders in place, home roomy. */
+/** BN1.2, everything fresh, the engine running with its orders in place, home roomy. */
 function snap(servers: Server[], over: Partial<Snapshot> & { money?: number; outlook?: Json } = {}): Snapshot {
   const { money, outlook, ...rest } = over;
   const engineReport = { pid: 7, atMs: NOW, value: { outlook: outlook === undefined ? OUTLOOK : outlook } };
@@ -59,28 +62,39 @@ describe("the fleet: the cheapest doubling across the slots", () => {
     ]);
   });
 
-  test("buys an empty slot at the size of the smallest server, the driver's sr-00 included", () => {
-    // sr-00 is #54's driver host at 32 GB; buying sr-01 at 32 ($1.76m) costs
-    // the same as doubling sr-00, and a new slot wins the tie.
+  test("buys an empty slot at the size of the smallest server", () => {
+    // Buying sr-01 at 32 ($1.76m) costs the same as doubling sr-00, and a new
+    // slot wins the tie.
     expect(calls(snap([{ host: "sr-00", ramGb: 32 }]))).toEqual([
       { kind: "call", script: BUY, arg: { host: "sr-01", ram: 32 }, host: "home" },
     ]);
   });
 
-  test("starts an empty fleet at the base size, and never buys sr-00, which is the driver's", () => {
+  test("starts an empty fleet at the base size, in the first slot", () => {
     expect(calls(snap([]))).toEqual([
-      { kind: "call", script: BUY, arg: { host: "sr-01", ram: FLEET_TUNABLES.baseRamGb }, host: "home" },
+      { kind: "call", script: BUY, arg: { host: "sr-00", ram: FLEET_TUNABLES.baseRamGb }, host: "home" },
     ]);
   });
 
-  test("leaves the driver's slot free: with 24 of 25 taken and no sr-00, it upgrades instead", () => {
-    expect(calls(snap(slots(24, 64, 1)))).toEqual([
-      { kind: "call", script: UPGRADE, arg: { host: "sr-01", ram: 128 }, host: "home" },
-    ]);
+  test("in BN1.1 sr-00 is the driver's: never bought here, its slot kept free, doubled once it is there", () => {
+    const bn11 = (servers: Server[]) => {
+      const s = snap(servers);
+      return { ...s, probes: { ...s.probes, route: route(1, {}) } };
+    };
+    // The driver buys sr-00 itself (at 32 GB), and that is the one call.
+    expect(calls(bn11([]))).toEqual([{ kind: "call", script: BUY, arg: { host: "sr-00", ram: 32 }, host: "home" }]);
+    const want = (s: Snapshot) => fleetWant(s, engineOrders(s), ["sr-00"]);
+    expect(want(bn11([]))).toEqual({ kind: "call", script: BUY, arg: { host: "sr-01", ram: FLEET_TUNABLES.baseRamGb } });
+    // 24 of 25 taken and no sr-00: the last slot waits for the driver, so it doubles instead.
+    expect(want(bn11(slots(24, 64, 1)))).toEqual({ kind: "call", script: UPGRADE, arg: { host: "sr-01", ram: 128 } });
+    // Once sr-00 is there it is doubled like any other.
+    expect(want(bn11([...slots(24, 64, 1), { host: "sr-00", ramGb: 32 }]))).toEqual({
+      kind: "call", script: UPGRADE, arg: { host: "sr-00", ram: 64 },
+    });
   });
 
   test("goes no higher than the game's RAM limit", () => {
-    const top = reading({ servers: slots(25, 1_048_576), limit: 25, ramLimitGb: 1_048_576, money: 1e15 });
+    const top = reading({ readAtMs: NOW, servers: slots(25, 1_048_576), limit: 25, ramLimitGb: 1_048_576, money: 1e15 });
     expect(calls({ ...snap([]), probes: { ...snap([]).probes, fleet: top } })).toEqual([]);
   });
 
@@ -126,9 +140,9 @@ describe("the fleet: payback and money", () => {
 
   test("skips it when the money is set aside for planned augmentations", () => {
     const s = snap(servers, { money: 1e6 });
-    expect(fleetWant(s, engineOrders(s), 0)).toMatchObject({ script: UPGRADE, arg: { host: "sr-24", ram: 32 } });
-    expect(fleetWant(s, engineOrders(s), 120_001)).toBeUndefined();
-    expect(fleetWant(s, engineOrders(s), 120_000)).toBeDefined();
+    expect(fleetWant(s, engineOrders(s), [], 0)).toMatchObject({ script: UPGRADE, arg: { host: "sr-24", ram: 32 } });
+    expect(fleetWant(s, engineOrders(s), [], 120_001)).toBeUndefined();
+    expect(fleetWant(s, engineOrders(s), [], 120_000)).toBeDefined();
   });
 });
 
@@ -146,6 +160,19 @@ describe("the fleet: one purchase per action", () => {
   test("buys again once that reading is in", () => {
     const s = snap(servers, { lastCall: bought(NOW - 1) });
     expect(calls(s)).toHaveLength(1);
+  });
+
+  test("judges the reading by when the probe read the game, not when its reply was collected", () => {
+    // Launched just before the purchase, collected just after it: stale.
+    const s = snap(servers, { lastCall: bought(NOW + 1) });
+    const collectedLate = { ...s, probes: { ...s.probes, fleet: { ...fleet(servers), atMs: NOW + 900 } } };
+    expect(calls(collectedLate)).toEqual([]);
+  });
+
+  test("waits while a server this conductor bought isn't in the reading yet (the game would rename a second one)", () => {
+    // #54: purchaseServer renames a taken name (sr-05-0) instead of failing.
+    expect(calls(snap(servers, { boughtServers: ["sr-25"] }))).toEqual([]);
+    expect(calls(snap(servers, { boughtServers: ["sr-24"] }))).toHaveLength(1);
   });
 
   test("buys nothing while the engine's orders are off (BN8, or the route not read yet)", () => {

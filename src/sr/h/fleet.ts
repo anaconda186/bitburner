@@ -8,6 +8,7 @@ import { serve } from "./serve.ts";
 
 export async function main(ns: NS): Promise<void> {
   await serve(ns, () => ({
+    readAtMs: Date.now(),
     servers: ns.cloud.getServerNames().map((host) => ({ host, ramGb: ns.getServerMaxRam(host) })),
     limit: ns.cloud.getServerLimit(),
     ramLimitGb: ns.cloud.getRamLimit(),

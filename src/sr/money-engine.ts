@@ -50,6 +50,8 @@ export type EngineOrders = {
    * (getBitNodeMultipliers needs SF5 and 4 GB), so the conductor sends them.
    */
   readonly mults: NodeMults;
+  /** RAM the engine never fills on other hosts, by host (#54: the driver's room on its cloud server). */
+  readonly hostReserveGb?: Readonly<Record<string, number>>;
 };
 
 /** No RAM for anything; what an empty or garbled control port means. */
@@ -64,14 +66,21 @@ const isShare = (x: unknown): x is number => typeof x === "number" && x >= 0 && 
  */
 export function readOrders(raw: unknown): EngineOrders {
   if (typeof raw !== "object" || raw === null) return ORDERS_OFF;
-  const { split, homeReserveGb, mults: rawMults } = raw as { split?: unknown; homeReserveGb?: unknown; mults?: unknown };
+  const { split, homeReserveGb, hostReserveGb, mults: rawMults } = raw as {
+    split?: unknown; homeReserveGb?: unknown; hostReserveGb?: unknown; mults?: unknown;
+  };
   if (typeof split !== "object" || split === null) return ORDERS_OFF;
   const { money, exp, sharing } = split as Record<string, unknown>;
   if (!isShare(money) || !isShare(exp) || !isShare(sharing) || money + exp + sharing > 1 + RAM_EPSILON) return ORDERS_OFF;
   if (typeof homeReserveGb !== "number" || !(homeReserveGb >= 0)) return ORDERS_OFF;
   const mults = pickMults(rawMults);
   if (mults === undefined) return ORDERS_OFF;
-  return { split: { money, exp, sharing }, homeReserveGb, mults };
+  const orders = { split: { money, exp, sharing }, homeReserveGb, mults };
+  if (hostReserveGb === undefined) return orders;
+  if (typeof hostReserveGb !== "object" || hostReserveGb === null) return ORDERS_OFF;
+  const reserves = Object.entries(hostReserveGb);
+  if (!reserves.every(([, gb]) => typeof gb === "number" && gb >= 0)) return ORDERS_OFF;
+  return { ...orders, hostReserveGb: Object.fromEntries(reserves) as Record<string, number> };
 }
 
 /**
@@ -209,7 +218,7 @@ function ramLedger(s: EngineSnapshot, orders: EngineOrders): { free: Map<string,
   let poolGb = 0;
   for (const h of s.hosts) {
     const ownGb = ramOf(s.inFlight.filter((j) => j.host === h.host));
-    let reserveGb = 0;
+    let reserveGb = orders.hostReserveGb?.[h.host] ?? 0;
     if (h.host === "home") {
       reserveGb = orders.homeReserveGb;
       const roomOnceLanded = freeNowGb(h) + ownGb - reserveGb;

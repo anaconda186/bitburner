@@ -239,10 +239,23 @@ describe("home", () => {
   });
 });
 
+describe("a reserve on another host (#54: the driver's room on sr-00)", () => {
+  test("keeps that much of the host free, and the rest is used as usual", () => {
+    // sr-00 32 GB, empty: 32 − 27.25 = 4.75 GB for 2 hack threads; with the
+    // driver running there (27.25 used), nothing.
+    const s = (usedRamGb: number) => snap({ hosts: [{ host: "sr-00", maxRamGb: 32, usedRamGb }] });
+    const orders: EngineOrders = { split: SPLIT_MONEY, homeReserveGb: 0, hostReserveGb: { "sr-00": 27.25 }, mults: NEUTRAL_MULTS };
+    expect(schedule(s(0), orders).reduce((n, j) => n + j.threads, 0)).toBe(2);
+    expect(schedule(s(27.25), orders)).toEqual([]);
+  });
+});
+
 describe("the control port", () => {
   test("reads the orders the conductor wrote", () => {
     const orders = { split: { money: 0.75, exp: 0, sharing: 0.25 }, homeReserveGb: 2.6, mults: { ...NEUTRAL_MULTS, ScriptHackMoney: 0.2 } };
     expect(readOrders(structuredClone(orders))).toEqual(orders);
+    const withHost = { ...orders, hostReserveGb: { "sr-00": 27.25 } };
+    expect(readOrders(structuredClone(withHost))).toEqual(withHost);
   });
 
   test("an empty port (after a reload or reset) or anything malformed is off", () => {
@@ -259,6 +272,8 @@ describe("the control port", () => {
       { split: SPLIT_MONEY, homeReserveGb: 0 },
       { split: SPLIT_MONEY, homeReserveGb: 0, mults: { ...NEUTRAL_MULTS, ScriptHackMoney: "x" } },
       { split: { money: Number.NaN, exp: 0, sharing: 0 }, homeReserveGb: 0 },
+      { split: SPLIT_MONEY, homeReserveGb: 0, hostReserveGb: { "sr-00": -1 }, mults: NEUTRAL_MULTS },
+      { split: SPLIT_MONEY, homeReserveGb: 0, hostReserveGb: "sr-00", mults: NEUTRAL_MULTS },
     ]) {
       expect(readOrders(raw)).toEqual(ORDERS_OFF);
     }

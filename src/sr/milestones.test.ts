@@ -66,6 +66,18 @@ describe("recording milestones", () => {
   });
 });
 
+describe("bn1.1:driver (#54)", () => {
+  const report = { pid: 9, atMs: T0, value: null };
+  test("is reached once the driver runs and has reported, in BN1.1", () => {
+    expect(milestonesReached(MILESTONES, snap(inBN(1)), [])).toEqual([]);
+    expect(milestonesReached(MILESTONES, snap(inBN(1), { workers: { driver: { running: true, failures: 0 } } }), [])).toEqual([]);
+    const up = { workers: { driver: { running: true, failures: 0, report } } };
+    expect(milestonesReached(MILESTONES, snap(inBN(1), up), [])).toEqual(["bn1.1:driver"]);
+    const dead = { workers: { driver: { running: false, failures: 1, report } } };
+    expect(milestonesReached(MILESTONES, snap(inBN(1), dead), [])).toEqual([]);
+  });
+});
+
 describe("plan extras", () => {
   const casino = scoped(1, 1, "casino", () => true);
   const joined = scoped(6, undefined, "joined", () => true);

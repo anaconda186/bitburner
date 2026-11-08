@@ -51,8 +51,14 @@ export function registry(...groups: readonly (readonly Milestone[])[]): readonly
   return all;
 }
 
+/** BN1.1's extras (spec #41 "BN1.1 plan"), in the order the plan reaches them. */
+export const BN1_1: readonly Milestone[] = [
+  // #54: the driver is up on its cloud server and has reported.
+  scoped(1, 1, "driver", (s) => s.workers.driver?.running === true && s.workers.driver.report !== undefined),
+];
+
 /** Every milestone of the run. Plans add their extras here as they land. */
-export const MILESTONES: readonly Milestone[] = registry(SPINE);
+export const MILESTONES: readonly Milestone[] = registry(SPINE, BN1_1);
 
 /**
  * The milestones whose test passes now and that are not in `reached` yet, in

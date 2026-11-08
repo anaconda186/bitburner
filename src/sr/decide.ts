@@ -11,8 +11,9 @@ import type { Json, Reply, WorkerReport } from "./helper-contract.ts";
 import {
   CALLS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeSpec, type ProbeValues, type WorkerName, type WorkerSpec,
 } from "./helpers.ts";
+import { nextDriverJob, readDriverNews, readDriverOrder, type City, type DriverOrder } from "./driver-jobs.ts";
 import { fleetWant } from "./fleet.ts";
-import type { NodeMults } from "./formulas.ts";
+import { cloudServerCost, NEUTRAL_MULTS, type NodeMults } from "./formulas.ts";
 import { ORDERS_OFF, readOrders, SPLIT_MONEY, type EngineOrders } from "./money-engine.ts";
 import { nodeMults } from "./node-mults.ts";
 
@@ -49,6 +50,11 @@ export type Snapshot = {
   readonly workers: { readonly [W in WorkerName]?: WorkerView };
   /** What is on each worker's control port now; absent when it is empty. */
   readonly controls: { readonly [W in WorkerName]?: Json };
+  /**
+   * Cloud servers this conductor bought (CALLS.buyServer replies), so one
+   * bought after the network probe's last scan counts as there. Absent: none.
+   */
+  readonly boughtServers?: readonly string[];
 };
 
 /** A long-lived worker as the conductor sees it. */
@@ -80,16 +86,81 @@ export type Action = ProbeLaunch | HelperCall | WorkerStart | WorkerControl;
 export type Want = Omit<ProbeLaunch, "host"> | Omit<HelperCall, "host"> | Omit<WorkerStart, "host"> | WorkerControl;
 
 export function decide(snapshot: Snapshot): readonly Action[] {
-  const wants: Want[] = staleProbes(snapshot).map((name) => ({ kind: "probe", name }));
+  const wants: Want[] = driverWants(snapshot);
+  wants.push(...staleProbes(snapshot).map((name): Want => ({ kind: "probe", name })));
   const rooting = rootWant(snapshot);
   if (rooting !== undefined) wants.push(rooting);
-  const purchase = fleetWant(snapshot, engineOrders(snapshot));
+  const purchase = fleetWant(snapshot, engineOrders(snapshot), driverWanted(snapshot) ? [DRIVER_HOST] : []);
   if (purchase !== undefined) wants.push(purchase);
   wants.push(...engineWants(snapshot));
   if (traderWanted(snapshot) && startDue(snapshot.workers.trader, snapshot.nowMs)) {
     wants.push({ kind: "start", worker: "trader", arg: null });
   }
   return place(snapshot, wants);
+}
+
+/** The driver's cloud server (WORKERS.driver.host) and the RAM it is bought with. */
+export const DRIVER_HOST = WORKERS.driver.host;
+export const DRIVER_HOST_RAM_GB = 32;
+const BUY_SCRIPT = CALLS.buyServer as HelperScript;
+/** How long after a failed purchase to try again. */
+export const BUY_RETRY_MS = 10_000;
+
+/** BN1.1 runs on UI automation (spec #41): the driver is wanted there and nowhere else. */
+export function driverWanted(s: Snapshot): boolean {
+  const route = s.probes.route;
+  return route?.ok === true && route.value.currentNode === 1 && (route.value.ownedSF[1] ?? 0) === 0;
+}
+
+/**
+ * Whether a server exists, as far as the conductor can tell: the network
+ * probe found it, or this conductor bought it since. Undefined until the
+ * network probe has read.
+ */
+function hostKnown(s: Snapshot, host: string): boolean | undefined {
+  const network = s.probes.network;
+  if (network?.ok !== true) return undefined;
+  return network.value.hosts.includes(host) || (s.boughtServers ?? []).includes(host);
+}
+
+/**
+ * The driver (#54): in BN1.1 its 32 GB cloud server is bought as soon as the
+ * money is there (the stats probe's reading), then the driver is started on
+ * it, before anything else is placed, and handed its jobs one at a time.
+ */
+function driverWants(s: Snapshot): Want[] {
+  if (!driverWanted(s)) return [];
+  const exists = hostKnown(s, DRIVER_HOST);
+  if (exists === undefined) return [];
+  if (!exists) {
+    const stats = s.probes.stats;
+    const last = s.lastCall;
+    const retrying = last?.script === BUY_SCRIPT && !last.reply.ok && s.nowMs - last.atMs < BUY_RETRY_MS;
+    if (stats?.ok !== true || stats.value.money < cloudServerCost(DRIVER_HOST_RAM_GB, NEUTRAL_MULTS) || retrying) return [];
+    return [{ kind: "call", script: BUY_SCRIPT, arg: { host: DRIVER_HOST, ram: DRIVER_HOST_RAM_GB } }];
+  }
+  const driver = s.workers.driver;
+  if (startDue(driver, s.nowMs)) return [{ kind: "start", worker: "driver", arg: { control: WORKERS.driver.control } }];
+  const news = driver?.running === true ? readDriverNews(driver.report?.value) : undefined;
+  if (news === undefined) return [];
+  // One job at a time: the order on the port is in hand until the driver
+  // reports its seq done. A driver started again redoes it (jobs check the
+  // game first, so a done one changes nothing).
+  const order = readDriverOrder(s.controls.driver);
+  if (order !== undefined && order.seq > news.done) return [];
+  const job = nextDriverJob(news, wantedCity(s));
+  if (job === undefined) return [];
+  const message: DriverOrder = { seq: Math.max(order?.seq ?? 0, news.done) + 1, job };
+  return [{ kind: "control", worker: "driver", message }];
+}
+
+/**
+ * Where the plan wants the player (the driver travels there), or null for
+ * anywhere. Nothing in BN1.1 needs a city yet; the casino in Aevum (#56) and
+ * the city factions (#59) fill this in.
+ */
+export function wantedCity(_s: Snapshot): City | null {
+  return null;
 }
 
 const ROOT_SCRIPT = CALLS.root as HelperScript;
@@ -132,14 +203,23 @@ export function engineOrders(s: Snapshot): EngineOrders {
   const route = s.probes.route;
   if (route?.ok !== true || route.value.currentNode === 8) return ORDERS_OFF;
   const reading = s.probes.bitnode;
-  return { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s), mults: nodeMults(route.value, reading?.ok ? reading.value : undefined) };
+  const mults = nodeMults(route.value, reading?.ok ? reading.value : undefined);
+  const orders = { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s), mults };
+  // The driver's room on its host stays free for it (a static reserve, so a
+  // driver that died finds its room still there when it is started again).
+  const driverGb = s.helperRamGb[WORKERS.driver.script] ?? 0;
+  return driverWanted(s) && driverGb > 0 ? { ...orders, hostReserveGb: { [DRIVER_HOST]: driverGb } } : orders;
 }
 
 const sameMults = (a: NodeMults, b: NodeMults): boolean =>
   (Object.keys(a) as (keyof NodeMults)[]).every((k) => a[k] === b[k]);
 
+const sameReserves = (a: EngineOrders["hostReserveGb"] = {}, b: EngineOrders["hostReserveGb"] = {}): boolean =>
+  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([h, gb]) => b[h] === gb);
+
 const sameOrders = (a: EngineOrders, b: EngineOrders): boolean =>
   a.homeReserveGb === b.homeReserveGb &&
+  sameReserves(a.hostReserveGb, b.hostReserveGb) &&
   a.split.money === b.split.money &&
   a.split.exp === b.split.exp &&
   a.split.sharing === b.split.sharing &&
@@ -218,7 +298,10 @@ export function place(snapshot: Snapshot, wants: readonly Want[]): Action[] {
     const cost = snapshot.helperRamGb[script] ?? 0;
     if (!(cost > 0)) continue;
     const spec: WorkerSpec | undefined = want.kind === "start" ? WORKERS[want.worker] : undefined;
-    const host = pickHost(free, cost, spec?.homeHeadroom === true ? homeReserveGb(snapshot) : 0);
+    const host =
+      spec?.host !== undefined
+        ? (free[spec.host] ?? 0) + RAM_EPSILON >= cost ? spec.host : undefined
+        : pickHost(free, cost, spec?.homeHeadroom === true ? homeReserveGb(snapshot) : 0);
     if (host === undefined) continue;
     free[host] = (free[host] ?? 0) - cost;
     placed.push({ ...want, host });

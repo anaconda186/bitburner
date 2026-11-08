@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { HELPER_RUNTIME, HELPER_SCRIPTS, WORKERS } from "./helpers.ts";
+import { HELPER_RUNTIME, HELPER_SCRIPTS, WORKERS, type WorkerSpec } from "./helpers.ts";
 
 const dir = fileURLToPath(new URL("./h/", import.meta.url));
 const sources = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
@@ -36,6 +36,11 @@ describe("helper registry", () => {
       }
       expect([...seen].filter((f) => !HELPER_RUNTIME.includes(f as never)).sort()).toEqual([...w.files].sort());
     }
+  });
+
+  test("no two workers share a status or control port", () => {
+    const ports = Object.values(WORKERS).flatMap((w: WorkerSpec) => [w.port, ...(w.control === undefined ? [] : [w.control])]);
+    expect(new Set(ports).size).toBe(ports.length);
   });
 
   test("the helper runtime is every library under src/sr/h/, and imports nothing at runtime", () => {
