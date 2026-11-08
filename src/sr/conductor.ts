@@ -114,13 +114,14 @@ function readFreeRam(ns: NS, m: Memory): Record<string, number> {
   return free;
 }
 
-function takeSnapshot(ns: NS, m: Memory): Snapshot {
+function takeSnapshot(ns: NS, m: Memory, category: string): Snapshot {
   const helperRamGb: Partial<Record<HelperScript, number>> = {};
   for (const script of HELPER_SCRIPTS) helperRamGb[script] = ns.getScriptRam(script, "home");
   if (m.lingeringCall !== undefined && !ns.isRunning(m.lingeringCall)) m.lingeringCall = undefined;
   const nowMs = Date.now();
   return {
     nowMs,
+    category,
     freeRamGb: readFreeRam(ns, m),
     helperRamGb,
     probes: { ...m.probes },
@@ -194,7 +195,8 @@ export async function main(ns: NS): Promise<void> {
   ns.tprint("conductor: up");
   // Every boot with no live conductor lands here. boot.js leaves an existing
   // state file alone, so the conductor records the build and the start (#49).
-  const start: ConductorStart = { atMs: Date.now(), savedUpdatedAt: record.state.updatedAt };
+  let start: ConductorStart = { atMs: Date.now(), savedUpdatedAt: record.state.updatedAt };
+  let firstLoop = true;
   record.update((state) => noteBuild(state, buildOnHome(ns.read(MANIFEST_FILE)), start.atMs));
   let startAccounted = false;
   const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts(), workers: {}, bought: [] };
@@ -204,7 +206,12 @@ export async function main(ns: NS): Promise<void> {
   for (;;) {
     try {
       collectProbes(ns, m);
-      const snapshot = takeSnapshot(ns, m);
+      const snapshot = takeSnapshot(ns, m, record.state.category);
+      if (firstLoop) {
+        // A casino report already on its port: this load was one of its script reloads (#56).
+        start = { ...start, afterCasino: snapshot.workers.casino !== undefined };
+        firstLoop = false;
+      }
       await carryOut(ns, m, decide(snapshot));
       // This start is a reload, a reset or the run's first: the route probe's
       // reset times tell which, so it is accounted once its reading lands.

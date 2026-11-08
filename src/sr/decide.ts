@@ -25,6 +25,11 @@ export type Snapshot = {
   /** Wall-clock time the snapshot was taken (`Date.now()`). */
   readonly nowMs: number;
   /**
+   * The run's category, from the state file (#56: the casino plays only in
+   * Open). Absent in fixtures that don't care, which reads as not Open.
+   */
+  readonly category?: string;
+  /**
    * Free RAM right now (GB, max minus used) on every server a helper can be
    * launched on: home, plus every server the network probe found that we
    * hold root on now. Its keys are exactly the rooted servers.
