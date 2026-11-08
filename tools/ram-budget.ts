@@ -66,7 +66,8 @@ export const RAM_BUDGETS: BudgetTable = {
   "sr/h/route.js": { budget: 2.6, contexts: EVERYWHERE },
   // #49: the stats probe (a split's hacking, money, M, home RAM). Base 1.6,
   // getPlayer 0.5, getServerMaxRam 0.05. Its "hack" key is quoted, or it
-  // would be charged as ns.hack (0.1).
+  // would be charged as ns.hack (0.1). #56: plus getMoneySources 1.0 (the
+  // casino winnings since the install; the city comes with getPlayer).
   "sr/h/stats.js": { budget: 3.15, contexts: EVERYWHERE },
   // #49: the sleeves probe (sleeve count). Base 1.6, sleeve.getNumSleeves 4.
   // Launched only in BN10 or with SF10, but priced the same everywhere.

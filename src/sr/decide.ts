@@ -91,6 +91,10 @@ export type Action = ProbeLaunch | HelperCall | WorkerStart | WorkerControl;
 export type Want = Omit<ProbeLaunch, "host"> | Omit<HelperCall, "host"> | Omit<WorkerStart, "host"> | WorkerControl;
 
 export function decide(snapshot: Snapshot): readonly Action[] {
+  // "Wait" (spec #41 story 53): while the casino plays, the conductor stays
+  // up and idle. Its one action is turning the money engine off (an empty
+  // port reads as off, so after the casino's reloads there is none).
+  if (casinoRunning(snapshot)) return place(snapshot, engineWants(snapshot));
   const wants: Want[] = driverWants(snapshot);
   wants.push(...staleProbes(snapshot).map((name): Want => ({ kind: "probe", name })));
   const rooting = rootWant(snapshot);
@@ -168,6 +172,11 @@ export function wantedCity(_s: Snapshot): City | null {
   return null;
 }
 
+/** The casino is alive (its own pid, or the one in its report), whoever started it. */
+export function casinoRunning(s: Snapshot): boolean {
+  return s.workers.casino?.running === true;
+}
+
 const ROOT_SCRIPT = CALLS.root as HelperScript;
 /** How often to try rooting the servers that aren't rooted yet (programs and levels come in over time). */
 export const ROOT_EVERY_MS = 10_000;
@@ -206,7 +215,7 @@ export function homeReserveGb(s: Snapshot): number {
  */
 export function engineOrders(s: Snapshot): EngineOrders {
   const route = s.probes.route;
-  if (route?.ok !== true || route.value.currentNode === 8) return ORDERS_OFF;
+  if (route?.ok !== true || route.value.currentNode === 8 || casinoRunning(s)) return ORDERS_OFF;
   const reading = s.probes.bitnode;
   const mults = nodeMults(route.value, reading?.ok ? reading.value : undefined);
   const orders = { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s), mults };
