@@ -182,3 +182,52 @@ Reasons:
 - That the v3.0.1 release zip's `resources/app/` is a usable static build (it would save the build step).
 - How long a load takes compared with the 2 s RFA auto-connect.
 - Whether `page.clock` runs the game stably, and how fast.
+
+These are answered in §6, apart from `page.clock`.
+
+## 6. Findings from the smoke harness (#46)
+
+Measured on 2026-11-07 with the harness in `tools/harness/` and `npm run smoke`, on Windows 11, Playwright 1.61.1 and its Chromium 149.0.7827.55 (Playwright build 1228), against the real v3.0.1 release zip's `resources/app/`. These were **run**, not inferred, unless marked. The CI runner was **not** measured here (nothing was pushed). Every smoke attempt logs a `findings` line with the same probes, so the first CI run records the CI numbers.
+
+### The open points above
+
+- **The release zip's `resources/app/` is a usable static build.** Served over plain HTTP from 127.0.0.1, it runs in stock Chromium with no Electron. The smoke test passes on it, start command included.
+- **The 2 s Remote API auto-connect can't be relied on.** The game connects only once, 2 s after page start, and the port comes from the save, which loads after `initSwc()` (21 MB of wasm).
+  - On a new game there is no save, so the port is still 0 when the auto-connect fires. Page start to the "Exit Tutorial" button took 1.95–6.5 s across 19 headless loads.
+  - After a reload with a 15–20 KB save, the terminal was back in 1.4–4.8 s. Loading the same save seeded into a fresh browser took 2.1 s. That is a race against the 2 s timer, which the auto-connect often loses.
+  - So the harness always presses **Connect** on Options → Remote API after each load (`connectRemoteApi`). That takes about 0.6–1.4 s, menus included.
+- **A loaded save opens the "Offline for N seconds" dialog** about 230 ms after the terminal appears. It blocks Playwright's real clicks and takes the keyboard focus. Escape closes it. The harness retries each click after closing dialogs, and checks what it typed before pressing Enter. Without that, the reload step failed all 6 attempts of one series of 3 runs.
+- **`page.clock` was not tried.** The smoke test runs in real time (about half a minute when it passes), so it needed no speed-up.
+
+### Throttling: headless, headed, and a page behind another tab
+
+The probe (`probeTimers`) times 100 ms `setTimeout`s in the game's page. The game's engine tick and every `ns.sleep` are `setTimeout`s (§3, "Tick speed"). The heartbeat check reads `sr/state.json` through `getFile` every 5 s for 6 minutes and records how old `updatedAt` is. The conductor refreshes it every 10 s (`REFRESH_MS`), so an unthrottled run stays under about 10 s plus the read gap. 6 minutes is past the 5 minutes after which Chrome's intensive throttling of hidden pages starts (about one wake-up a minute). The three modes ran at the same time, one run each, on the build from before #47 and #48 were merged (a conductor that only beats).
+
+| Mode | `visibilityState` / focus | Timer lateness in front, p50 / max | Just after a second tab came to the front, p50 / max | Oldest heartbeat over 6 min behind that tab |
+|---|---|---|---|---|
+| Headless shell (Playwright's default headless) | visible / focused | 8 / 27 ms | 9 / 10 ms | 7.3 s |
+| New headless (`channel: "chromium"`) | visible / focused | 9 / 16 ms | 28 / 186 ms | 10.5 s |
+| Headed window | visible / focused | 9 / 11 ms | 30 / 214 ms | 10.1 s |
+
+- **Nothing is throttled under Playwright, headless or headed.** The 8–9 ms lateness is the ordinary timer overhead of a page in front: it was the same headed as headless. The higher figures just after the second tab opened were taken while that tab was loading. After 6 minutes behind it the p50 was back to 8–9 ms in every mode, and the heartbeat was never older than one refresh plus one read gap.
+- **A page behind another tab still reports `visible` and focused.** Playwright emulates focus and visibility for every page, so bringing another tab to the front doesn't hide the game. So the harness **cannot reproduce** background-tab throttling as it stands. Testing it would need the Chrome DevTools Protocol (for example `Emulation.setFocusEmulationEnabled` off, or `Page.setWebLifecycleState`). That wasn't tried, because background tabs are out of scope for runs (#1).
+- **The smoke test runs headless, in Playwright's default headless shell.** Both headless modes behaved the same, and the shell is the lighter one. **(inference)** The same focus emulation applies on the Linux CI runner, so its windows should not be throttled either. Read the CI log's `findings` line (`timers`, `maxStateAgeMs`) to confirm it.
+- **A real player's browser is a separate question.** The findings above cover Playwright only. In a normal Chrome, a hidden tab or a minimised window is still throttled as described in `realtime-throughput.md` §4, and a visible window that is fully covered by another window may be too (Chromium's occlusion tracking). None of that was measured here.
+
+### Other facts the harness relies on
+
+- **Error lines** in the terminal carry a class ending in `-error`, from the tss-react `makeStyles` key in `ANSIITypography`. A `tprint` starting with `ERROR` or `FAIL` gets it. `WARN` gets `-warning` instead (from the source; not run).
+- **A script that throws** opens a modal with `<h2>RUNTIME ERROR</h2>` and prints nothing to the terminal. The harness reads these modals too.
+- **The first submission** of the start command on a new game prints `Script boot.js does not exist on home.` as an error line, as designed (user story 2). The smoke test allows exactly that line, once, in the start phase only.
+- **Timings of a passing smoke** (4 passing runs on the build with #47 and #48 merged):
+  - first submission to the conductor's first state write: 4.5–9.4 s;
+  - reload: 1.4–4.8 s;
+  - retype to the conductor writing again: 3.7–5.6 s;
+  - the oldest heartbeat seen: 8.7–11.4 s.
+
+  The whole attempt takes about half a minute. The conductor's first iteration rewrites the file boot created, so `updatedAt` passes `startedAt` soon after `conductor: up`.
+- **The save** after a start is a 15 KB gzip. Reading it with `readSave` and loading it into a fresh browser with `seedSave` skips the tutorial and brings the run's files and state file onto home.
+- **A broken conductor fails the smoke test:**
+  - one that throws on start fails in about 10 s (an error modal, a state file never refreshed, nothing in `ps`);
+  - one whose every iteration fails fails in about 6 s (`ERROR conductor:` lines);
+  - one that runs but never writes the state file fails at the 10-minute deadline.

@@ -2,7 +2,7 @@
 # passes all of them publishes build/ to the orphan `release` branch, the one
 # the start command downloads from. Steps run in order and any failure stops
 # the job, so a failing push never reaches the publish step and the previous
-# release stays live. New gates (RAM budget, smoke test) go before "Publish".
+# release stays live. Every gate (RAM budget, smoke test) goes before "Publish".
 name: CI
 
 on:
@@ -47,6 +47,32 @@ jobs:
       # script fails here, so it never reaches the publish step.
       - name: RAM budget
         run: npm run ram-check -- --build build
+
+      # Chromium for the smoke test, at the build the pinned playwright wants.
+      # The cache holds the browser download; --with-deps still installs the
+      # system libraries it needs on every run.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+
+      # The smoke test: the real v3.0.1 game, headless, with the start command
+      # served the exact bytes of build/. New game, start command twice, state
+      # file updating, RAM cross-check against the game's calculateRam, then a
+      # page reload and one retype. It retries a failed attempt once by itself;
+      # a second failure fails this step, so nothing is published and the
+      # previous release stays live. Each attempt logs its throttling probe.
+      - name: Smoke test
+        run: npm run smoke -- --build build --source ${{ github.sha }}
+      - name: Keep the smoke test's evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-evidence
+          path: .smoke/
+          if-no-files-found: ignore
 
       - name: Publish to release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
