@@ -11,3 +11,5 @@ Thumbs.db
 build/
 # exported run records (compare)
 runs/
+# smoke test evidence from failed attempts (npm run smoke)
+.smoke/

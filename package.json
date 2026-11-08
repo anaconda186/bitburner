@@ -11,18 +11,22 @@
     "test": "vitest run",
     "build": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "ram-check": "node tools/ram-check.ts",
+    "smoke": "node tools/smoke.ts",
     "publish-release": "node tools/publish.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
     "@types/yauzl": "3.4.0",
     "acorn": "8.16.0",
     "acorn-jsx-walk": "2.0.0",
     "acorn-walk": "8.3.2",
     "esbuild": "0.28.2",
     "lodash": "4.17.23",
+    "playwright": "1.61.1",
     "typescript": "7.0.2",
     "vitest": "5.0.5",
+    "ws": "8.22.0",
     "yauzl": "3.4.0"
   },
   "description": "My scripts for [Bitburner](https://github.com/bitburner-official/bitburner-src)."

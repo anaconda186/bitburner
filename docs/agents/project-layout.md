@@ -12,6 +12,7 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 | `npm test` | Vitest, once. |
 | `npm run build` | Clean `build/`, then compile `src/` into it. |
 | `npm run ram-check` | The static RAM budget gate over `build/` (run `build` first; `-- --build <dir>` for another folder). |
+| `npm run smoke` | The Playwright smoke test over `build/` in the real game (run `build` first). `-- --once` skips the retry, `--headed` shows the window, `--build <dir>` tests another folder. Needs Chromium once: `npx playwright install chromium`. |
 | `npm run publish-release` | Push `build/` to the orphan `release` branch. CI runs it; for a local try, `-- --remote <path to a bare repo>`. |
 
 ## Folders
@@ -20,8 +21,10 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 |---|---|
 | `src/` | Game scripts in TypeScript. **`src/` mirrors home:** `src/boot.ts` becomes `boot.js` at the root, and every other script goes under `src/sr/`. Nothing else may live in `src/` except tests. |
 | `src/**/*.test.ts` | Unit tests, next to the code they test (seams A–E). Never compiled into `build/`. |
-| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, later the harness and `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
-| `test/` | Tests and checks that belong to no single file, such as `ns-api-guard.ts`, which proves the typecheck catches Netscript misuse. Later: the Playwright smoke harness. |
+| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, later `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
+| `tools/harness/` | The Playwright harness (#46): the game in Chromium, the local release, our Remote API server and the smoke test's pure verdicts. Reused by the dev loop and scenario tests. |
+| `test/` | Tests and checks that belong to no single file, such as `ns-api-guard.ts`, which proves the typecheck catches Netscript misuse, and `ci-gate.test.ts`, which pins the gate order in the workflow. |
+| `.smoke/` | gitignored. A failed smoke attempt's screenshot and terminal text (CI uploads it as the `smoke-evidence` artifact). |
 | `.game/` | gitignored. `app/` = the v3.0.1 static build (the zip's `resources/app/`), `source/<repo path>` = pinned game source files. The game's code is never committed. |
 | `build/` | gitignored. Exactly the files the release ships. |
 
@@ -121,10 +124,26 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 - **A row is a budget in GB plus the contexts the script runs in** (`RAM_CONTEXTS`: `BN1.1`, `BN4`, `SF4.1`, `SF4.2`, `SF4.3`, `BN10 start`; `EVERYWHERE` is all of them). The gate prices the script in each with the game's own calculator and compares the worst case with the budget. Add a context preset when a row needs one; only the BitNode and the SF4 level change any cost.
 - **The calculator** (`tools/ram-calc.ts`) bundles the pinned `RamCalculations.ts` and its import closure from `.game/source/` with esbuild, stubbing `@player`, `@swc/wasm-web` and `@babel/standalone`. Each built file is passed in at its home path, so imports are charged as in the game. Its tests (`tools/ram-calc.test.ts`) pin the SF4 multipliers and the 25 GB `document`/`window` charge.
 
+## Smoke test and harness (set by #46)
+
+- **What it checks** (`tools/smoke.ts`), in the real v3.0.1 build (`.game/app`) in headless Chromium:
+  1. New game, Exit Tutorial, then Options → Remote API pointed at the harness's server (host `127.0.0.1`, a free port, reconnection delay 1 s), Connect.
+  2. The start command typed twice (the second once the `wget` has answered). Passes if the conductor rewrites `sr/state.json` (`updatedAt` past `startedAt`) within 10 min, `ps` still lists `sr/conductor.js`, the page threw nothing, no game error dialog opened, and the terminal's only error line is `Script boot.js does not exist on home.` (once).
+  3. The RAM cross-check: every `.js` in the build, entry script or library, priced by `tools/ram-calc.ts` in `BN1.1` and by the game's `calculateRam` on home. Any difference over 0.005 GB, or a script either side can't price, fails. There is no fixed list, so new scripts are covered as they land.
+  4. Save (the save icon, then wait for IndexedDB to change), reload, Connect again, type the start command once. Passes if the state file keeps the same `startedAt` and is written after the retype, the conductor runs and no error line shows at all.
+- **Flake rule:** a failed attempt is retried once in a fresh browser (`retryOnce`); a second failure exits 1. Each attempt logs a `findings` line (load, connect, start, reload and resume times, the timer probe, the oldest heartbeat seen, the start phase's error lines).
+- **The local release** (`tools/harness/release.ts`): `page.route` answers `https://raw.githubusercontent.com/anaconda186/bitburner/**` from `build/`. `release/<path>` serves every file and `release/manifest.json`; `<sha>/<path>` serves the files, where `sha` is made from the file hashes (stable per build); anything else is a 404. Every answer has `access-control-allow-origin: *`. The manifest has publish's shape, so boot.js runs exactly as against the real branch.
+- **Remote API** (`tools/harness/remote-api.ts`): `startRemoteApi()` is a JSON-RPC WebSocket server (the game is the client). It uses the newest connection, so it survives a reload. Read state through `getFile("sr/state.json")`: `cat` doesn't put file text into the terminal.
+- **The game** (`tools/harness/game.ts`): `serveGame`, `openBrowser(release)`, `loadGame`, `exitTutorial`, `connectRemoteApi(page, port)`, `typeLine` (real key presses), `terminalLines` (with the game's error styling, a class ending in `-error`), `errorDialogs`, `isRunningOnHome` (types `ps`), `saveGame`, `readSave`/`seedSave` (IndexedDB `bitburnerSave` v2, `savestring`, `save`) and `probeTimers`.
+- **Pure verdicts** (`tools/harness/verdict.ts`, tested): `judgeStart`, `judgeResume`, `compareRam`, `retryOnce`, `terminalErrors`. Add a rule here with a test, then collect what it needs in `smoke.ts`.
+- **Never click or type with bare Playwright calls in the game.** A loaded save opens the Offline dialog about 250 ms after the terminal appears, and it blocks clicks and takes the focus. Use `clickThrough` (inside the helpers) and `typeLine`, which close dialogs and retry.
+- **Always press Connect after a load.** The game's own auto-connect fires once, 2 s after page start, before the save (and so the port) has loaded. See `docs/research/headless-game.md` §6 for this and the throttling findings.
+- **Browser:** the pinned `playwright` (exact version in `package.json`) and its Chromium; CI installs it with `npx playwright install --with-deps chromium` and caches `~/.cache/ms-playwright`.
+
 ## CI (`.github/workflows/ci.yml`)
 
-- **One job, `gate`, runs on every push and PR:** `npm ci` → restore the `.game` cache → `fetch-game` → `typecheck` → `test` → `build` → `ram-check` → publish (pushes to `main` only).
+- **One job, `gate`, runs on every push and PR:** `npm ci` → restore the `.game` cache → `fetch-game` → `typecheck` → `test` → `build` → `ram-check` → install Chromium → `smoke` → publish (pushes to `main` only). On a failure the `.smoke/` evidence is uploaded.
 - **A failed step stops the job,** so a failing push never publishes and the previous release stays live.
-- **New gates** (the smoke test in #46) go as steps before "Publish to release", like the RAM budget step.
+- **New gates** go as steps before "Publish to release", like the RAM budget and smoke steps. `test/ci-gate.test.ts` fails if a gate ends up after publish or a step may continue past a failure.
 - **The `.game` cache key** is the hash of `tools/game-pin.ts` and `tools/fetch-game.ts`.
 - **Runs are serialized per ref and never cancelled,** so `main` publishes in order.
