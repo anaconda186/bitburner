@@ -45,10 +45,12 @@ export async function settle(call: () => Json | void | Promise<Json | void>): Pr
 
 /**
  * A long-lived worker's news: replaces whatever is on its status port with a
- * WorkerReport, so the port always holds exactly the latest one.
+ * WorkerReport, so the port always holds exactly the latest one. A worker
+ * handing over to a copy of itself names the copy's `pid`, so the conductor
+ * sees the copy alive and starts no other.
  */
-export function postReport(ns: NS, port: number, value: Json): void {
-  const report: WorkerReport = { pid: ns.pid, atMs: Date.now(), value };
+export function postReport(ns: NS, port: number, value: Json, pid: number = ns.pid): void {
+  const report: WorkerReport = { pid, atMs: Date.now(), value };
   ns.clearPort(port);
   ns.writePort(port, report);
 }

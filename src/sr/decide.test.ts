@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { decide, place, type Snapshot } from "./decide.ts";
-import { PROBES, WORKERS, type HelperScript } from "./helpers.ts";
+import { CALLS, PROBES, WORKERS, type HelperScript } from "./helpers.ts";
+import { ORDERS_OFF, SPLIT_MONEY, type EngineOrders } from "./money-engine.ts";
 
 const NETWORK = PROBES.network.script;
 
@@ -14,6 +15,7 @@ function snap(over: Partial<Snapshot> = {}): Snapshot {
     probesInFlight: [],
     callRunning: false,
     workers: {},
+    controls: {},
     ...over,
   };
 }
@@ -155,7 +157,8 @@ describe("decide: the BN8 trader", () => {
   });
 
   test("starts no trader outside BN8, without TIX access, or before both are read", () => {
-    expect(decide(bn8({ probes: { network, route: route(1), market: market(true) } }))).toEqual([]);
+    // (Outside BN8 the money engine's orders are written; no trader.)
+    expect(decide(bn8({ probes: { network, route: route(1), market: market(true) } })).filter((a) => a.kind === "start")).toEqual([]);
     expect(decide(bn8({ probes: { network, route: route(8), market: market(false) } }))).toEqual([]);
     expect(decide(bn8({ probes: { network, route: route(8) }, probesInFlight: ["market"] }))).toEqual([]);
     expect(decide(bn8({ probes: { network, market: market(true) }, probesInFlight: ["route"] }))).toEqual([]);
@@ -184,5 +187,122 @@ describe("decide: the BN8 trader", () => {
       { ...start, host: "big-1" },
     ]);
     expect(decide(bn8({ freeRamGb: { home: 20, "n00dles": 4 } }))).toEqual([]);
+  });
+});
+
+describe("decide: rooting servers", () => {
+  const ROOT = CALLS.root!;
+  const NOW = 1_700_000_000_000;
+  const network = (hosts: string[]) => ({ ok: true, value: { hosts }, atMs: NOW }) as const;
+  /** Fresh-save numbers: the conductor on an 8 GB home, n00dles already rooted. */
+  const fresh = (over: Partial<Snapshot> = {}) =>
+    snap({
+      nowMs: NOW,
+      freeRamGb: { home: 4.15, "n00dles": 4 },
+      helperRamGb: { [NETWORK]: 1.8, [ROOT]: 1.9 },
+      probes: { network: network(["home", "n00dles", "foodnstuff", "CSEC"]) },
+      ...over,
+    });
+  const rootCall = { kind: "call", script: ROOT, arg: { hosts: ["CSEC", "foodnstuff"] }, host: "home" } as const;
+
+  test("tries to root every server the network probe found that isn't rooted yet", () => {
+    expect(decide(fresh())).toEqual([rootCall]);
+  });
+
+  test("tries again 10 s after its last try, not before", () => {
+    const last = (atMs: number) => ({ script: ROOT, arg: rootCall.arg, atMs, reply: { ok: true, value: { rooted: [] } } }) as const;
+    expect(decide(fresh({ lastCall: last(NOW - 9_999) }))).toEqual([]);
+    expect(decide(fresh({ lastCall: last(NOW - 10_000) }))).toEqual([rootCall]);
+  });
+
+  test("does nothing once every server it knows of is rooted", () => {
+    const freeRamGb = { home: 4.15, "n00dles": 4, "foodnstuff": 16, "CSEC": 8 };
+    expect(decide(fresh({ freeRamGb }))).toEqual([]);
+  });
+});
+
+describe("decide: the money engine", () => {
+  const ENGINE = WORKERS.engine.script;
+  const NOW = 1_700_000_000_000;
+  const reading = <T,>(value: T) => ({ ok: true, value, atMs: NOW }) as const;
+  const route = (currentNode: number) => reading({ currentNode, ownedSF: {}, lastAugReset: NOW, lastNodeReset: NOW });
+  const COSTS = {
+    [NETWORK]: 1.8,
+    [PROBES.route.script]: 2.6,
+    [PROBES.stats.script]: 2.15,
+    [PROBES.market.script]: 1.65,
+    [PROBES.sleeves.script]: 5.6,
+    [CALLS.root!]: 1.9,
+    [ENGINE]: 4.65,
+  };
+  /** BN1 a few seconds in: every probe fresh, the 0-port servers rooted. */
+  const bn1 = (over: Partial<Snapshot> = {}) =>
+    snap({
+      nowMs: NOW,
+      freeRamGb: { home: 4.15, "n00dles": 4, "foodnstuff": 16, "sigma-cosmetics": 16 },
+      helperRamGb: COSTS,
+      probes: {
+        network: reading({ hosts: ["home", "n00dles", "foodnstuff", "sigma-cosmetics"] }),
+        route: route(1),
+        stats: reading({ hack: 1, money: 1000, M: 1, homeRam: 8 }),
+        market: reading({ hasTixApi: false }),
+      },
+      ...over,
+    });
+  // The reserve is the dearest probe or action helper that may run: the route
+  // probe's 2.6 GB (the sleeves probe only runs in BN10 or with SF10).
+  const MONEY = { split: SPLIT_MONEY, homeReserveGb: 2.6 };
+  const control = (message: EngineOrders) => ({ kind: "control", worker: "engine", message }) as const;
+  const start = (host: string) => ({ kind: "start", worker: "engine", arg: { control: WORKERS.engine.control }, host }) as const;
+  const running = { engine: { running: true, failures: 0 } };
+
+  test("writes the money split to the engine's control port and starts the engine on the first rooted 16 GB server", () => {
+    // Home has 4.15 GB free: the engine fits, but not with the reserve beside it.
+    expect(decide(bn1())).toEqual([control(MONEY), start("foodnstuff")]);
+  });
+
+  test("writes the orders only when the port doesn't hold them already", () => {
+    expect(decide(bn1({ controls: { engine: MONEY } }))).toEqual([start("foodnstuff")]);
+    expect(decide(bn1({ controls: { engine: MONEY }, workers: running }))).toEqual([]);
+    const stale = { split: SPLIT_MONEY, homeReserveGb: 1.8 };
+    expect(decide(bn1({ controls: { engine: stale }, workers: running }))).toEqual([control(MONEY)]);
+  });
+
+  test("starts the engine on home once home has room for it and the reserve", () => {
+    const freeRamGb = (home: number) => ({ home, "n00dles": 4, "foodnstuff": 16, "sigma-cosmetics": 16 });
+    expect(decide(bn1({ controls: { engine: MONEY }, freeRamGb: freeRamGb(7.25) }))).toEqual([start("home")]);
+    expect(decide(bn1({ controls: { engine: MONEY }, freeRamGb: freeRamGb(7.24) }))).toEqual([start("foodnstuff")]);
+  });
+
+  test("waits for a server the engine fits on", () => {
+    const probes = { ...bn1().probes, network: reading({ hosts: ["home", "n00dles"] }) };
+    expect(decide(bn1({ probes, controls: { engine: MONEY }, freeRamGb: { home: 4.15, "n00dles": 4 } }))).toEqual([]);
+  });
+
+  test("relaunches a dead engine after the backoff, like any worker", () => {
+    const died = (atMs: number) => ({ engine: { running: false, failures: 2, lastFailAtMs: atMs } });
+    expect(decide(bn1({ controls: { engine: MONEY }, workers: died(NOW - 1_999) }))).toEqual([]);
+    expect(decide(bn1({ controls: { engine: MONEY }, workers: died(NOW - 2_000) }))).toEqual([start("foodnstuff")]);
+  });
+
+  test("switches the engine off over the port in BN8, where hacking earns no money, and doesn't start it", () => {
+    const bn8 = { ...bn1().probes, route: route(8) };
+    expect(decide(bn1({ probes: bn8, controls: { engine: MONEY }, workers: running }))).toEqual([control(ORDERS_OFF)]);
+    expect(decide(bn1({ probes: bn8 }))).toEqual([]);
+  });
+
+  test("and on again when the money split is wanted", () => {
+    expect(decide(bn1({ controls: { engine: ORDERS_OFF }, workers: running }))).toEqual([control(MONEY)]);
+  });
+
+  test("leaves the engine off until the route probe has said where the run is", () => {
+    const { route: _unread, ...probes } = bn1().probes;
+    expect(decide(bn1({ probes, probesInFlight: ["route"] }))).toEqual([]);
+  });
+
+  test("counts the sleeves probe in the reserve where it runs", () => {
+    const bn10 = { ...bn1().probes, route: route(10), sleeves: reading({ count: 1 }) };
+    const orders = { split: SPLIT_MONEY, homeReserveGb: 5.6 };
+    expect(decide(bn1({ probes: bn10, controls: { engine: orders }, workers: running }))).toEqual([]);
   });
 });

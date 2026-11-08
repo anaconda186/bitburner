@@ -4,7 +4,7 @@
 // threads to steal a fraction f are f / per-thread fraction).
 import { describe, expect, test } from "vitest";
 import { NEUTRAL_MULTS, type Hacker } from "./formulas.ts";
-import { HACK_JOB, JOB_RAM_GB, moveHome, schedule, SPLIT_MONEY, SPLIT_OFF, type Job, type EngineOrders, type EngineSnapshot, type TargetView } from "./money-engine.ts";
+import { HACK_JOB, JOB_RAM_GB, LAND_SLACK_MS, moveHome, ORDERS_OFF, readOrders, schedule, SPLIT_MONEY, SPLIT_OFF, stillInFlight, type Job, type EngineOrders, type EngineSnapshot, type TargetView } from "./money-engine.ts";
 
 const NOW = 1_700_000_000_000;
 const player = (hacking: number): Hacker => ({
@@ -229,5 +229,41 @@ describe("home", () => {
     // A home that won't have room even then is used as usual.
     const small = { ...s, hosts: [{ host: "home", maxRamGb: 8, usedRamGb: 3.85 }, ...s.hosts.slice(1)], inFlight: [] };
     expect(onHome(schedule(small, reserve(0)))).toBe(2);
+  });
+});
+
+describe("the control port", () => {
+  test("reads the orders the conductor wrote", () => {
+    const orders = { split: { money: 0.75, exp: 0, share: 0.25 }, homeReserveGb: 2.6 };
+    expect(readOrders(structuredClone(orders))).toEqual(orders);
+  });
+
+  test("an empty port (after a reload or reset) or anything malformed is off", () => {
+    expect(ORDERS_OFF.split).toEqual(SPLIT_OFF);
+    for (const raw of [
+      "NULL PORT DATA",
+      undefined,
+      null,
+      { split: SPLIT_MONEY },
+      { split: { money: 1, exp: 0 }, homeReserveGb: 0 },
+      { split: { money: 0.8, exp: 0.4, share: 0 }, homeReserveGb: 0 },
+      { split: { money: -1, exp: 0, share: 0 }, homeReserveGb: 0 },
+      { split: SPLIT_MONEY, homeReserveGb: -1 },
+      { split: { money: Number.NaN, exp: 0, share: 0 }, homeReserveGb: 0 },
+    ]) {
+      expect(readOrders(raw)).toEqual(ORDERS_OFF);
+    }
+  });
+});
+
+describe("the in-flight book", () => {
+  const at = (landsAtMs: number): Job => ({
+    script: HACK_JOB, host: "big", target: "n00dles", threads: 1, additionalMsec: 0, landsAtMs, steal: 0.004, securityRise: 0.002,
+  });
+
+  test("keeps a job until it should have landed, plus slack for a late timer", () => {
+    const jobs = [at(NOW), at(NOW + 5_000)];
+    expect(stillInFlight(jobs, NOW + LAND_SLACK_MS)).toEqual(jobs);
+    expect(stillInFlight(jobs, NOW + LAND_SLACK_MS + 1)).toEqual([at(NOW + 5_000)]);
   });
 });

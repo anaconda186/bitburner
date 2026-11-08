@@ -43,6 +43,34 @@ export type EngineOrders = {
   readonly homeReserveGb: number;
 };
 
+/** No RAM for anything; what an empty or garbled control port means. */
+export const ORDERS_OFF: EngineOrders = { split: SPLIT_OFF, homeReserveGb: 0 };
+
+const isShare = (x: unknown): x is number => typeof x === "number" && x >= 0 && x <= 1;
+
+/**
+ * The orders on the control port. The port is empty after a reload or a reset
+ * until the conductor writes it again, and an empty port ("NULL PORT DATA") or
+ * anything that isn't well-formed orders is off: the engine launches nothing.
+ */
+export function readOrders(raw: unknown): EngineOrders {
+  if (typeof raw !== "object" || raw === null) return ORDERS_OFF;
+  const { split, homeReserveGb } = raw as { split?: unknown; homeReserveGb?: unknown };
+  if (typeof split !== "object" || split === null) return ORDERS_OFF;
+  const { money, exp, share } = split as Record<string, unknown>;
+  if (!isShare(money) || !isShare(exp) || !isShare(share) || money + exp + share > 1 + RAM_EPSILON) return ORDERS_OFF;
+  if (typeof homeReserveGb !== "number" || !(homeReserveGb >= 0)) return ORDERS_OFF;
+  return { split: { money, exp, share }, homeReserveGb };
+}
+
+/** A job is dropped from the in-flight book this long after it should have landed (timers only fire late). */
+export const LAND_SLACK_MS = 1000;
+
+/** The jobs that may not have landed yet. */
+export function stillInFlight(jobs: readonly Job[], nowMs: number): Job[] {
+  return jobs.filter((j) => nowMs <= j.landsAtMs + LAND_SLACK_MS);
+}
+
 /** A server the engine may launch jobs on (rooted), as read this loop. */
 export type HostView = { readonly host: string; readonly maxRamGb: number; readonly usedRamGb: number };
 
