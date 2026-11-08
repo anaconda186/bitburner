@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import {
   exportName,
   exportText,
+  liveTable,
   parseRun,
   rolledBack,
   watchState,
@@ -62,6 +63,44 @@ describe("the rollback watcher", () => {
     log = watchAll([two, two], log, 30);
     expect(30 * MIN - 2 * MIN).toBeGreaterThan(WATCH_GAP_MS);
     expect(watchedMs(log)).toBe(3 * MIN);
+  });
+});
+
+describe("the live table", () => {
+  const stats = { hack: 87, money: 1_234_567, M: 1.16, homeRam: 64, sleeves: 0 };
+  const one = recordMilestone(START, "bn1.1", T0 + 10 * MIN, stats);
+  // A reload at minute 20 lost 5 minutes, then bn1.1:x at minute 30.
+  const reloaded = { ...one, reloads: [{ atMs: T0 + 20 * MIN, gapMs: 5 * MIN }] };
+  const two = recordMilestone(reloaded, "bn1.1:x", T0 + 30 * MIN, UNKNOWN);
+  const table = (watch: WatchLog | null = null) => liveTable(two, T0 + 40 * MIN, watch);
+  const lineOf = (lines: string[], milestone: string) => lines.find((l) => l.split(/\s+/)[0] === milestone) ?? "";
+
+  test("heads with the run, its time so far, gross and net, and its reloads", () => {
+    const [first, second] = table();
+    expect(first).toBe("run open, started 2026-11-07 12:00:00 UTC on aaaaaaa");
+    expect(second).toBe("0:40:00 gross, 0:35:00 net; 1 reloads losing 0:05:00; 0 installs");
+  });
+
+  test("has one line per split: gross, net, segment, build and stats", () => {
+    const lines = table();
+    expect(lineOf(lines, "bn1.1").split(/\s+/)).toEqual(["bn1.1", "0:10:00", "0:10:00", "+0:10:00", "aaaaaaa", "0", "87", "1.23e6", "1.16", "64", "0"]);
+    expect(lineOf(lines, "bn1.1:x").split(/\s+/)).toEqual(["bn1.1:x", "0:30:00", "0:25:00", "+0:15:00", "aaaaaaa", "0", "?", "?", "?", "?", "?"]);
+  });
+
+  test("says rollbacks unobserved without the watcher", () => {
+    expect(table().at(-1)).toBe("rollbacks unobserved");
+  });
+
+  test("marks what the watcher saw rolled back", () => {
+    const lost = recordMilestone(two, "bn1.1:y", T0 + 35 * MIN, UNKNOWN);
+    const watch = watchAll([two, lost, two], null, 37);
+    const lines = table(watch);
+    expect(lineOf(lines, "bn1.1:y")).toMatch(/^bn1\.1:y\s+0:35:00\s+rolled back$/);
+    expect(lines.at(-1)).toBe("rollbacks: 1 (bn1.1:y), watched 0:02:00 of 0:40:00");
+  });
+
+  test("says when there is no split yet", () => {
+    expect(liveTable(START, T0 + MIN, null)).toContain("no milestone yet");
   });
 });
 

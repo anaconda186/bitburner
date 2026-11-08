@@ -10,7 +10,7 @@
 // "rollbacks unobserved".
 import { formatDuration } from "../src/sr/splits.ts";
 import { splitTime, type BuildRecord, type RunState, type Split, type Times } from "../src/sr/state.ts";
-import { rolledBack, watchedMs, type RunRecord, type Seen } from "./runs.ts";
+import { layOut, rollbackText, rolledBack, watchedMs, type Rollbacks, type RunRecord } from "./runs.ts";
 
 /** One run's side of a row. */
 export type Side = {
@@ -34,9 +34,6 @@ export type Row = {
   /** Both runs reached it, and the builds that ran its segment differ. */
   readonly buildsDiffer: boolean;
 };
-
-/** What the rollback watcher saw of a run, or null when none was attached. */
-export type Rollbacks = { readonly seen: readonly Seen[]; readonly watchedMs: number; readonly runMs: number } | null;
 
 /** One run as a whole. */
 export type RunSummary = {
@@ -146,14 +143,6 @@ export type RenderOptions = {
 const short = (sha: string) => sha.slice(0, 7);
 const signed = (ms: number) => (ms < 0 ? "-" : "+") + formatDuration(Math.abs(ms));
 
-/** The words for what the watcher saw of a run. Never "none" unless it was attached. */
-export function rollbackText(r: Rollbacks): string {
-  if (r === null) return "rollbacks unobserved";
-  const watched = `watched ${formatDuration(r.watchedMs)} of ${formatDuration(r.runMs)}`;
-  if (r.seen.length === 0) return `rollbacks: none seen, ${watched}`;
-  return `rollbacks: ${r.seen.length} (${r.seen.map((s) => s.milestone).join(", ")}), ${watched}`;
-}
-
 /** The report as lines of text: a header, then one table line per milestone. */
 export function renderCompare(report: Report, opts: RenderOptions = {}): string[] {
   const columns = opts.columns ?? "net";
@@ -190,12 +179,6 @@ export function renderCompare(report: Report, opts: RenderOptions = {}): string[
   });
   const flagged = report.rows.filter((r) => r.buildsDiffer).length;
   const footer = [`builds differ in ${flagged} of ${report.rows.length} segments`];
-  return [...header, "", ...pad([titles, ...table]), "", ...footer];
+  return [...header, "", ...layOut([titles, ...table]), "", ...footer];
 }
 
-/** Lays rows of cells out in columns, two spaces apart. */
-function pad(rows: string[][]): string[] {
-  const widths: number[] = [];
-  for (const r of rows) r.forEach((c, i) => (widths[i] = Math.max(widths[i] ?? 0, c.length)));
-  return rows.map((r) => r.map((c, i) => c.padEnd(widths[i] ?? 0)).join("  ").trimEnd());
-}

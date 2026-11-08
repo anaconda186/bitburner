@@ -1,6 +1,7 @@
 // Run records out of the game (seam E): what the live reader exports to
 // `runs/`, and the rollback watcher's log. Pure: no files, no sockets here.
-import { parseState, type RunState, type Split } from "../src/sr/state.ts";
+import { formatDuration } from "../src/sr/splits.ts";
+import { lostMs, parseState, runTime, splitTime, type RunState, type Split } from "../src/sr/state.ts";
 
 /** A split the watcher saw in the state file. `ms` (gross) tells two reaches of one milestone apart. */
 export type Seen = { readonly milestone: string; readonly ms: number };
@@ -115,4 +116,76 @@ export function parseRun(text: string): RunResult {
 /** How long the watcher was reading the state file. */
 export function watchedMs(log: WatchLog): number {
   return log.windows.reduce((sum, w) => sum + (w.toMs - w.fromMs), 0);
+}
+
+/** What the rollback watcher saw of a run, or null when none was attached. */
+export type Rollbacks = { readonly seen: readonly Seen[]; readonly watchedMs: number; readonly runMs: number } | null;
+
+/** The words for what the watcher saw of a run. Never "none" unless it was attached. */
+export function rollbackText(r: Rollbacks): string {
+  if (r === null) return "rollbacks unobserved";
+  const watched = `watched ${formatDuration(r.watchedMs)} of ${formatDuration(r.runMs)}`;
+  if (r.seen.length === 0) return `rollbacks: none seen, ${watched}`;
+  return `rollbacks: ${r.seen.length} (${r.seen.map((s) => s.milestone).join(", ")}), ${watched}`;
+}
+
+const short = (sha: string) => sha.slice(0, 7);
+const known = (x: number | null, f: (n: number) => string = String) => (x === null ? "?" : f(x));
+const money = (n: number) => (Math.abs(n) >= 1e6 ? n.toExponential(2).replace("e+", "e") : String(Math.floor(n)));
+
+/**
+ * The live reader's table for the state file as read at `nowMs`: the run so
+ * far, one line per split (gross, net, the net segment since the previous
+ * split, the build, installs and stats), the splits the watcher saw rolled
+ * back, and what it saw of rollbacks.
+ */
+export function liveTable(state: RunState, nowMs: number, watch: WatchLog | null): string[] {
+  const time = runTime(state, nowMs);
+  const started = new Date(state.startedAt).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+  const head = [
+    `run ${state.category}, started ${started} on ${[state.buildSha, ...buildChanges(state)].map(short).join(" > ")}`,
+    `${formatDuration(time.grossMs)} gross, ${formatDuration(time.netMs)} net; ` +
+      `${state.reloads.length} reloads losing ${formatDuration(lostMs(state))}; ${state.installs} installs`,
+  ];
+  const lost = watch ? rolledBack(watch, state) : [];
+  const entries = [...splitsOf(state).map((s) => ({ s, lost: false })), ...lost.map((s) => ({ s, lost: true }))];
+  entries.sort((x, y) => x.s.ms - y.s.ms);
+  const rows: string[][] = [["milestone", "gross", "net", "segment", "build", "installs", "hack", "money", "M", "home", "sleeves"]];
+  let prevNet = 0;
+  for (const { s, lost: gone } of entries) {
+    if (gone) {
+      rows.push([s.milestone, formatDuration(s.ms), "rolled back"]);
+      continue;
+    }
+    const split = s as Split;
+    const { grossMs, netMs } = splitTime(split);
+    const st = split.stats;
+    rows.push([
+      split.milestone,
+      formatDuration(grossMs),
+      formatDuration(netMs),
+      "+" + formatDuration(netMs - prevNet),
+      short(split.build),
+      String(split.installs),
+      known(st.hack),
+      known(st.money, money),
+      known(st.M, (m) => m.toFixed(2)),
+      known(st.homeRam),
+      known(st.sleeves),
+    ]);
+    prevNet = netMs;
+  }
+  const body = entries.length === 0 ? ["no milestone yet"] : layOut(rows);
+  const rollbacks: Rollbacks = watch ? { seen: lost, watchedMs: watchedMs(watch), runMs: time.grossMs } : null;
+  return [...head, "", ...body, "", rollbackText(rollbacks)];
+}
+
+const buildChanges = (state: RunState) =>
+  (state.builds as readonly { sha?: unknown }[]).flatMap((b) => (typeof b?.sha === "string" ? [b.sha] : []));
+
+/** Lays rows of cells out in columns, two spaces apart. */
+export function layOut(rows: readonly (readonly string[])[]): string[] {
+  const widths: number[] = [];
+  for (const r of rows) r.forEach((c, i) => (widths[i] = Math.max(widths[i] ?? 0, c.length)));
+  return rows.map((r) => r.map((c, i) => c.padEnd(widths[i] ?? 0)).join("  ").trimEnd());
 }
