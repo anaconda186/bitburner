@@ -155,6 +155,10 @@ _Avoid_: Checkpoint, snapshot
 A save made only to measure the game's behaviour, which may be edited and may carry the game's exploit flag. It is never a milestone save, never a starting point for a scenario test, and never part of a run.
 _Avoid_: Test save, debug save
 
+**Golden values**:
+Results recorded from the game's own `ns.formulas` on a lab save, which the run's formula model must reproduce exactly.
+_Avoid_: Reference values, expected outputs
+
 **Release**:
 The latest build that passed every check required before runs may use it. The start command always downloads the current release.
 _Avoid_: Deploy, version
