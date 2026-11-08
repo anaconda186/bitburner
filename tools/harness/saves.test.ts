@@ -1,9 +1,24 @@
 // Milestone saves and lab saves (seam F, the pure half): names, sidecars,
 // what a save says about itself, and when the listener captures one.
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseState, STATE_FILE } from "../../src/sr/state.ts";
-import { captureRecord, LAB_MARKER, LAB_SAVES_DIR, markLabSave, milestoneToCapture, SAVES_DIR, saveFacts, saveFileBase } from "./saves.ts";
+import {
+  captureRecord,
+  LAB_MARKER,
+  LAB_SAVES_DIR,
+  loadScenarioSave,
+  markLabSave,
+  milestoneToCapture,
+  SAVES_DIR,
+  saveFacts,
+  saveFileBase,
+  scenarioStart,
+  storeCapture,
+} from "./saves.ts";
 
 /**
  * A save the way v3.0.1 writes one (SaveObject.ts): gzip of
@@ -152,8 +167,77 @@ describe("captureRecord", () => {
     expect(r.sidecar.kind).toBe("lab");
   });
 
+  it("round-trips: a captured milestone save is a scenario start", () => {
+    const bytes = gameSave({ bitNodeN: 4, sourceFiles: [[1, 1]], homeText: { [STATE_FILE]: stateText({ milestones: ["bn1.1"] }) } });
+    const r = scenarioStart(JSON.stringify(captureRecord(bytes, at).sidecar), bytes);
+    expect(r.ok && { milestone: r.milestone, context: r.context, startedAt: r.state.startedAt }).toEqual({
+      milestone: "bn1.1",
+      context: { bitNodeN: 4, sourceFiles: { 1: 1 } },
+      startedAt: 1_000,
+    });
+  });
+
   it("refuses a save whose state file has no milestone or can't be read", () => {
     expect(() => captureRecord(gameSave({ homeText: { [STATE_FILE]: stateText() } }), at)).toThrow(/no milestone/);
     expect(() => captureRecord(gameSave(), at)).toThrow(/state file/);
+  });
+});
+
+describe("storeCapture and loadScenarioSave", () => {
+  const withSave = (milestones: string[], money = 1, homeText: Record<string, string> = {}) =>
+    gameSave({ homeText: { ...homeText, [STATE_FILE]: stateText({ milestones }), "money.txt": String(money) } });
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "saves-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("stores a capture as <name>.gz plus <name>.json, and regenerating replaces both", async () => {
+    await storeCapture(root, withSave(["bn1.1"], 1), new Date("2026-01-01T00:00:00Z"));
+    const second = withSave(["bn1.1"], 2);
+    const where = await storeCapture(root, second, new Date("2026-02-01T00:00:00Z"));
+    expect(where).toEqual({ dir: SAVES_DIR, base: "bn1.1", milestone: "bn1.1" });
+    expect(await readdir(join(root, SAVES_DIR))).toEqual(["bn1.1.gz", "bn1.1.json"]);
+    const loaded = await loadScenarioSave(root, "bn1.1");
+    expect(loaded.ok && Buffer.from(loaded.bytes).equals(Buffer.from(second))).toBe(true);
+    expect(JSON.parse(await readFile(join(root, SAVES_DIR, "bn1.1.json"), "utf8")).capturedAt).toBe("2026-02-01T00:00:00.000Z");
+  });
+
+  it("keeps lab captures out of saves/, so a scenario can't start from one", async () => {
+    const where = await storeCapture(root, withSave(["bn4.1"], 1, { [LAB_MARKER]: "x" }), new Date());
+    expect(where.dir).toBe(LAB_SAVES_DIR);
+    expect(await readdir(join(root, LAB_SAVES_DIR))).toEqual(["bn4.1.gz", "bn4.1.json"]);
+    const loaded = await loadScenarioSave(root, "bn4.1");
+    expect(loaded.ok ? "accepted" : loaded.error).toMatch(/no sidecar/);
+  });
+});
+
+describe("scenarioStart", () => {
+  const at = new Date("2026-11-07T10:00:00Z");
+  const real = gameSave({ homeText: { [STATE_FILE]: stateText({ milestones: ["bn1.1"] }) } });
+  const sidecar = (change: Record<string, unknown> = {}) => JSON.stringify({ ...captureRecord(real, at).sidecar, ...change });
+  const refusal = (r: ReturnType<typeof scenarioStart>) => (r.ok ? "accepted" : r.error);
+
+  it("refuses a lab save, whatever its sidecar says", () => {
+    const lab = markLabSave(real, "edited");
+    expect(refusal(scenarioStart(JSON.stringify(captureRecord(lab, at).sidecar), lab))).toMatch(/lab save/);
+    expect(refusal(scenarioStart(sidecar(), lab))).toMatch(/lab save/);
+    expect(refusal(scenarioStart(sidecar({ kind: "lab" }), real))).toMatch(/lab save/);
+  });
+
+  it("refuses a save with no sidecar or no save file", () => {
+    expect(refusal(scenarioStart(null, real))).toMatch(/no sidecar/);
+    expect(refusal(scenarioStart(sidecar(), null))).toMatch(/no save file/);
+    expect(refusal(scenarioStart("{oops", real))).toMatch(/sidecar/);
+  });
+
+  it("refuses a save made for another target version", () => {
+    expect(refusal(scenarioStart(sidecar({ gameVersion: "2.8.1" }), real))).toMatch(/2\.8\.1.*3\.0\.1/);
+  });
+
+  it("refuses a sidecar that doesn't belong to the save", () => {
+    expect(refusal(scenarioStart(sidecar({ milestone: "bn4.1" }), real))).toMatch(/bn4\.1.*bn1\.1/);
   });
 });

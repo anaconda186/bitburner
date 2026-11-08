@@ -8,9 +8,12 @@
 // - A lab save (GLOSSARY) is made to measure the game and may be edited. It
 //   lives apart, under lab-saves/, and is never a scenario start.
 
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { currentBuild, parseState, reachedMilestones, STATE_FILE, type RunState } from "../../src/sr/state.ts";
 import { GAME_VERSION } from "../game-pin.ts";
+import type { RamContext } from "../ram-calc.ts";
 
 /** Milestone saves, relative to the repo root. Committed. */
 export const SAVES_DIR = "saves";
@@ -166,6 +169,77 @@ export function captureRecord(bytes: Uint8Array, at: Date): CaptureRecord {
       sourceFiles: facts.sourceFiles,
     },
   };
+}
+
+export type ScenarioStart =
+  | {
+      ok: true;
+      milestone: string;
+      /** The run's state as the save holds it. */
+      state: RunState;
+      /** What the game prices scripts by in this save (tools/ram-calc.ts). */
+      context: RamContext;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Whether a save may start a scenario test: a milestone save with its
+ * sidecar, made for the target version, that is not a lab save by either its
+ * sidecar or its own contents (GLOSSARY: a lab save is never a scenario start).
+ */
+export function scenarioStart(sidecarText: string | null, bytes: Uint8Array | null): ScenarioStart {
+  const refuse = (error: string): ScenarioStart => ({ ok: false, error });
+  if (sidecarText === null) return refuse("no sidecar: only saves the listener captured can start a scenario");
+  if (bytes === null) return refuse("no save file beside the sidecar");
+  let sidecar: Partial<Sidecar>;
+  try {
+    sidecar = JSON.parse(sidecarText) as Partial<Sidecar>;
+  } catch {
+    return refuse("the sidecar is not JSON");
+  }
+  let facts: SaveFacts;
+  let state: RunState;
+  try {
+    facts = saveFacts(bytes);
+    state = savedState(bytes);
+  } catch (e) {
+    return refuse(e instanceof Error ? e.message : String(e));
+  }
+  if (sidecar.kind !== "milestone" || facts.lab) return refuse("this is a lab save, which is never a scenario start");
+  if (sidecar.gameVersion !== GAME_VERSION) return refuse(`the save was made for v${String(sidecar.gameVersion)}, not the target version v${GAME_VERSION}`);
+  if (sidecar.milestone !== state.milestone)
+    return refuse(`the sidecar says ${String(sidecar.milestone)} but the save's state file says ${String(state.milestone)}`);
+  return { ok: true, milestone: state.milestone!, state, context: { bitNodeN: facts.bitNodeN, sourceFiles: facts.sourceFiles } };
+}
+
+/**
+ * Writes a captured save and its sidecar under `root` (the repo), replacing
+ * any earlier capture of the same milestone. Each file is written whole and
+ * renamed into place, so a reader never sees half a save.
+ */
+export async function storeCapture(root: string, bytes: Uint8Array, at: Date): Promise<{ dir: string; base: string; milestone: string }> {
+  const r = captureRecord(bytes, at);
+  const dir = join(root, r.dir);
+  await mkdir(dir, { recursive: true });
+  const put = async (name: string, body: Uint8Array | string) => {
+    const tmp = join(dir, `.${name}.${process.pid}.part`);
+    await writeFile(tmp, body);
+    await rename(tmp, join(dir, name));
+  };
+  await put(`${r.base}.gz`, bytes);
+  await put(`${r.base}.json`, JSON.stringify(r.sidecar, null, 2) + "\n");
+  return { dir: r.dir, base: r.base, milestone: r.sidecar.milestone };
+}
+
+/** A scenario start by milestone name, from `<root>/saves/` only. */
+export async function loadScenarioSave(root: string, milestone: string): Promise<(ScenarioStart & { ok: true; bytes: Uint8Array }) | { ok: false; error: string }> {
+  const base = join(root, SAVES_DIR, saveFileBase(milestone));
+  const read = <T>(p: Promise<T>) => p.catch(() => null);
+  const sidecar = await read(readFile(`${base}.json`, "utf8"));
+  const bytes = await read(readFile(`${base}.gz`));
+  const r = scenarioStart(sidecar, bytes && new Uint8Array(bytes));
+  if (!r.ok) return { ok: false, error: `${SAVES_DIR}/${saveFileBase(milestone)}: ${r.error}` };
+  return { ...r, bytes: new Uint8Array(bytes!) };
 }
 
 /** The save with the lab marker on home (dev only: this is a save edit). `note` is the marker's text. */
