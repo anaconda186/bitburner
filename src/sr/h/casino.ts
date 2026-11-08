@@ -105,10 +105,18 @@ function savedGame(): Promise<unknown> {
   });
 }
 
-/** A save is a string or bytes, depending on the save settings. */
-function sameSave(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array) || a.length !== b.length) return false;
+/** A save as bytes: the game stores gzip bytes, or a string with compression off (src/types.ts SaveData). */
+function saveBytes(v: unknown): Uint8Array | string | undefined {
+  if (v === undefined || typeof v === "string" || v instanceof Uint8Array) return v;
+  if (v instanceof ArrayBuffer) return new Uint8Array(v);
+  throw new Error(`unexpected save in IndexedDB (${Object.prototype.toString.call(v)})`);
+}
+
+function sameSave(x: unknown, y: unknown): boolean {
+  const a = saveBytes(x);
+  const b = saveBytes(y);
+  if (typeof a !== "object" || typeof b !== "object") return a === b;
+  if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
