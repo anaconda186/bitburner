@@ -87,6 +87,7 @@ function readWorld(ns: NS, nowMs: number, inFlight: readonly Job[], orders: Engi
       moneyMax,
       hackDifficulty: ns.getServerSecurityLevel(host),
       minDifficulty: ns.getServerMinSecurityLevel(host),
+      baseDifficulty: ns.getServerBaseSecurityLevel(host),
       serverGrowth: ns.getServerGrowth(host),
       requiredHackingSkill: ns.getServerRequiredHackingLevel(host),
     });

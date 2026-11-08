@@ -25,6 +25,7 @@ const target = (host: string, over: Partial<TargetView> = {}): TargetView => ({
   moneyAvailable: 2e6,
   moneyMax: 50e6,
   serverGrowth: 0,
+  baseDifficulty: 10,
   ...over,
 });
 const ORDERS: EngineOrders = { split: SPLIT_MONEY, homeReserveGb: 0, mults: NEUTRAL_MULTS };
@@ -72,7 +73,7 @@ describe("the RAM split", () => {
     // 100 GB in all; a job in flight holds 20 threads (34 GB) of the 50 GB
     // money share, so 16 GB is left for 9 more threads.
     const held: Job = {
-      script: HACK_JOB, host: "big", target: "joesguns", threads: 20, additionalMsec: 0,
+      script: HACK_JOB, host: "big", target: "joesguns", threads: 20, additionalMsec: 0, purpose: "drain", launchedAtMs: NOW - 5_000,
       landsAtMs: NOW + 5_000, steal: 0.1, securityRise: 0.04,
     };
     const s = snap({ hosts: [{ host: "big", maxRamGb: 100, usedRamGb: 34 }], inFlight: [held] });
@@ -129,7 +130,7 @@ describe("drain targets", () => {
 
 describe("jobs in flight", () => {
   const onTheWay = (target: string, threads: number, steal: number, securityRise: number): Job => ({
-    script: HACK_JOB, host: "big", target, threads, additionalMsec: 0, landsAtMs: NOW + 1_000, steal, securityRise,
+    script: HACK_JOB, host: "big", target, threads, additionalMsec: 0, purpose: "drain", launchedAtMs: NOW - 9_000, landsAtMs: NOW + 1_000, steal, securityRise,
   });
 
   test("a target whose money a hack in flight will take gets nothing more", () => {
@@ -227,7 +228,7 @@ describe("home", () => {
     // 5.95 GB free now. Once they land there is room for the engine, so the
     // 3.35 GB above the reserve stays free (else 1 more thread would go there).
     const held = Array.from({ length: 1 }, (): Job => ({
-      script: HACK_JOB, host: "home", target: "n00dles", threads: 6, additionalMsec: 0,
+      script: HACK_JOB, host: "home", target: "n00dles", threads: 6, additionalMsec: 0, purpose: "drain", launchedAtMs: NOW - 9_000,
       landsAtMs: NOW + 1_000, steal: 0.02, securityRise: 0.012,
     }));
     const s = withHome(20, 3.85 + 10.2, held);
@@ -282,7 +283,7 @@ describe("the control port", () => {
 
 describe("the in-flight book", () => {
   const at = (landsAtMs: number): Job => ({
-    script: HACK_JOB, host: "big", target: "n00dles", threads: 1, additionalMsec: 0, landsAtMs, steal: 0.004, securityRise: 0.002,
+    script: HACK_JOB, host: "big", target: "n00dles", threads: 1, additionalMsec: 0, purpose: "drain", launchedAtMs: landsAtMs - 9_000, landsAtMs, steal: 0.004, securityRise: 0.002,
   });
 
   test("keeps a job until it should have landed, plus slack for a late timer", () => {

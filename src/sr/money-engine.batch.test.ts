@@ -31,6 +31,7 @@ const phantasy = (over: Partial<TargetView> = {}): TargetView => ({
   moneyMax: 600e6,
   moneyAvailable: 600e6,
   serverGrowth: 35,
+  baseDifficulty: 20,
   ...over,
 });
 const orders = (mults: NodeMults = NEUTRAL_MULTS): EngineOrders => ({ split: SPLIT_MONEY, homeReserveGb: 0, mults });
@@ -186,7 +187,7 @@ describe("drift", () => {
   test("while batching, a target that has drifted a little gets repair threads in its next batch: more weaken and more grow", () => {
     // A batch's hack on the way: the engine is batching this target.
     const onTheWay: Job = {
-      script: HACK_JOB, host: "sr-00", target: "phantasy", threads: 10, additionalMsec: 0,
+      script: HACK_JOB, host: "sr-00", target: "phantasy", threads: 10, additionalMsec: 0, purpose: "batch", launchedAtMs: T0 - 60_000,
       landsAtMs: T0 + 60_000, steal: 0.02, securityRise: 0.02,
     };
     const next = (target: TargetView) => schedule(snapAt(T0, hosts, [target], [onTheWay]), orders());
@@ -261,7 +262,7 @@ describe("drift", () => {
 
   test("launches nothing on the target while one of its jobs is about to land (its duration would be read wrong)", () => {
     const landing: Job = {
-      script: WEAKEN_JOB, host: "sr-00", target: "phantasy", threads: 10, additionalMsec: 0,
+      script: WEAKEN_JOB, host: "sr-00", target: "phantasy", threads: 10, additionalMsec: 0, purpose: "batch", launchedAtMs: T0 - 100_000,
       landsAtMs: T0 + 30, steal: 0, securityRise: -0.5,
     };
     const s = snapAt(T0, hosts, [phantasy({ hackDifficulty: 7.2 })], [landing]);
