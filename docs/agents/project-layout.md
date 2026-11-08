@@ -13,6 +13,7 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 | `npm run build` | Clean `build/`, then compile `src/` into it. |
 | `npm run ram-check` | The static RAM budget gate over `build/` (run `build` first; `-- --build <dir>` for another folder). |
 | `npm run smoke` | The Playwright smoke test over `build/` in the real game (run `build` first). `-- --once` skips the retry, `--headed` shows the window, `--build <dir>` tests another folder. Needs Chromium once: `npx playwright install chromium`. |
+| `npm run record-formulas` | Dev only: re-record the formula model's golden values (`test/golden/formulas.json`) with `ns.formulas.*` in the real game, on lab saves. `-- --headed` shows the window. Never part of CI. |
 | `npm run publish-release` | Push `build/` to the orphan `release` branch. CI runs it; for a local try, `-- --remote <path to a bare repo>`. |
 
 ## Folders
@@ -24,6 +25,7 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 | `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, later `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
 | `tools/harness/` | The Playwright harness (#46): the game in Chromium, the local release, our Remote API server and the smoke test's pure verdicts. Reused by the dev loop and scenario tests. |
 | `test/` | Tests and checks that belong to no single file, such as `ns-api-guard.ts`, which proves the typecheck catches Netscript misuse, and `ci-gate.test.ts`, which pins the gate order in the workflow. |
+| `test/golden/` | Golden-value fixtures recorded from the real game (`formulas.json`, by `npm run record-formulas`). Never edited by hand. |
 | `.smoke/` | gitignored. A failed smoke attempt's screenshot and terminal text (CI uploads it as the `smoke-evidence` artifact). |
 | `.game/` | gitignored. `app/` = the v3.0.1 static build (the zip's `resources/app/`), `source/<repo path>` = pinned game source files. The game's code is never committed. |
 | `build/` | gitignored. Exactly the files the release ships. |
@@ -134,6 +136,20 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
      - A different `lastAugReset` means a reset, not a reload. `installs` goes up by one if `lastAugReset > lastNodeReset` (an install, not a BitNode entry). No reload record is written.
      - The same `lastAugReset` means a page reload or a kill. One `{ atMs, gapMs }` is appended to `reloads`, where `gapMs = atMs - savedUpdatedAt`, the heartbeat the reload rolled back to. The conductor prints `conductor: reload; <gap> lost since the last save`.
 - **Why `installs` and `resetAt` are fields:** the game has no install count, and it can't tell a reload from a reset restart. Only reloads are reload loss.
+
+## Formula model (set by #52)
+
+- **One pure module, `src/sr/formulas.ts`,** holds our own implementation of the game's formulas, shared by every decider and the money engine. No run script calls `ns.formulas` (`test/no-formulas.test.ts` checks the compiled sources); Formulas.exe only cross-checks the model, through the golden values.
+- **Inputs:** `Target` (the server fields, as `ns.getServer` gives them), `Hacker` (`skills.hacking`, `skills.intelligence` and the five `hacking_*` mults, as `ns.getPlayer` gives them) and `NodeMults` (the BitNode multipliers the formulas read, named as in the game; `NEUTRAL_MULTS` is BN1). Multipliers are always an argument, never a global.
+- **Hacking:** `hackChance`, `hackExp`, `hackFraction` (ns `hackPercent`), `hackTimeMs`, `growTimeMs`, `weakenTimeMs`, `growFactor` (ns `growPercent`), `grownMoney` (ns `growAmount`), `growThreadsFor` (ns `growThreads`, from the server's `moneyAvailable`), `weakenAmount`, plus `coreBonus` and `intelligenceBonus`. Times are in ms, like `ns.formulas`. Darknet servers (fixed 16 s hack) are not modelled.
+- **Other:** `skillFromExp`, `expForSkill`, `hackingLevel(exp, playerHackingMult, bn)`, `cloudServerCost(ram, bn)` and `cloudServerMaxRam(bn)`.
+- **Adding a formula:**
+  1. Write it with a doc comment citing its v3.0.1 source as `src/<path>:<line>` (a test fails on an exported function without one).
+  2. Take every BitNode multiplier it reads as an input: add the field to `NodeMults` and `NEUTRAL_MULTS`.
+  3. Record golden values: add cases to `tools/golden/formulas-recorder.ts`, run `npm run record-formulas`, and add a `misses(...)` test in `src/sr/formulas.test.ts`. The comparison is exact (`Object.is`): the model does the game's arithmetic in the game's order.
+  4. Add hand-worked cases for multipliers the lab saves don't reach.
+  5. Never name an export like an NS function (`hack`, `grow`, `share`, `getServer...`): run scripts import the module, and the RAM test there prices every export at exactly the base 1.6 GB.
+- **The recorder:** `tools/record-formulas.ts` starts a new game, saves it, and edits it (`tools/golden/lab-save.ts`) into two lab saves with Formulas.exe and SF5 on a 64 GB home: BN1 (every multiplier 1) and BN12 level 30 (SF12.29; most hacking multipliers 1.02^±30, cloud max RAM 2^19). In each it pushes the game script `tools/golden/formulas-recorder.ts` (transpiled by esbuild) over the Remote API, runs it, and reads back its JSON. The cases come from a seeded PRNG, but a new game randomizes server stats, so each recording has different numbers.
 
 ## RAM budget (`tools/ram-budget.ts`)
 
