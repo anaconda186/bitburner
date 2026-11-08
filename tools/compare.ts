@@ -8,9 +8,12 @@
 // two runs ran different builds are flagged. A run exported with the rollback
 // watcher attached marks the milestones it saw rolled back; one without says
 // "rollbacks unobserved".
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { parseArgs } from "node:util";
 import { formatDuration } from "../src/sr/splits.ts";
 import { splitTime, type BuildRecord, type RunState, type Split, type Times } from "../src/sr/state.ts";
-import { layOut, rollbackText, rolledBack, watchedMs, type Rollbacks, type RunRecord } from "./runs.ts";
+import { layOut, parseRun, rollbackText, rolledBack, watchedMs, type Rollbacks, type RunRecord } from "./runs.ts";
 
 /** One run's side of a row. */
 export type Side = {
@@ -178,7 +181,32 @@ export function renderCompare(report: Report, opts: RenderOptions = {}): string[
     return line;
   });
   const flagged = report.rows.filter((r) => r.buildsDiffer).length;
-  const footer = [`builds differ in ${flagged} of ${report.rows.length} segments`];
+  const shared = report.rows.filter((r) => r.a.split !== null && r.b.split !== null).length;
+  const footer = [`builds differ in ${flagged} of the ${shared} segments both runs reached`];
   return [...header, "", ...layOut([titles, ...table]), "", ...footer];
+}
+
+if (import.meta.main) {
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: { gross: { type: "boolean", default: false }, both: { type: "boolean", default: false } },
+  });
+  const fail = (why: string): never => {
+    console.error(why);
+    process.exit(1);
+  };
+  if (positionals.length !== 2) fail("usage: npm run compare -- <a.json> <b.json> [--gross | --both]");
+  const [fileA, fileB] = positionals as [string, string];
+  const read = async (file: string): Promise<RunRecord> => {
+    const r = parseRun(await readFile(file, "utf8"));
+    return r.ok ? r.run : fail(`compare: ${file}: ${r.error}`);
+  };
+  const result = compare(await read(fileA), await read(fileB));
+  if (!result.ok) fail(result.error);
+  else {
+    const columns: Columns = values.both ? "both" : values.gross ? "gross" : "net";
+    const labels = { a: basename(fileA), b: basename(fileB) };
+    console.log(renderCompare(result.report, { columns, labels }).join("\n"));
+  }
 }
 
