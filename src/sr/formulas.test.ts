@@ -232,3 +232,15 @@ export async function main(ns) { ns.print([${names.join(", ")}]); }`;
     expect(await price("export function weaken() { return 0; }", ["weaken"])).toMatchObject({ ok: true, cost: 1.75 });
   });
 });
+
+describe("citations", () => {
+  it("every exported function cites a v3.0.1 source line in its doc comment", () => {
+    const source = readFileSync(join(import.meta.dirname, "formulas.ts"), "utf8");
+    const exported = [...source.matchAll(/^export function (\w+)/gm)].map((m) => m[1]);
+    const cited = [...source.matchAll(/\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*export function (\w+)/g)]
+      .filter(([, doc]) => /src\/[\w/.]+\.tsx?:\d+/.test(doc!))
+      .map(([, , name]) => name);
+    expect(exported.length).toBeGreaterThan(10);
+    expect(cited).toEqual(exported);
+  });
+});

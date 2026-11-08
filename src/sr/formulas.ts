@@ -1,18 +1,20 @@
-// The formula model (seam D): our own copy of the game's formulas, so the run
-// decides without Formulas.exe. Pure functions only.
+// The formula model (seam D): our own implementation of the game's formulas,
+// so the run decides without Formulas.exe. Pure functions only; one module
+// shared by every decider and the money engine's scheduler.
 //
 // Every function cites the Bitburner v3.0.1 source it follows, as
 // <path>:<line> at commit 3162fd2 (tag v3.0.1):
 // https://github.com/bitburner-official/bitburner-src/blob/3162fd2590e221eadd0c0fbd46151913f7c4c41c/<path>#L<line>
-// BitNode multipliers are an input (NodeMults), never a global. They are
-// checked against golden values from ns.formulas.* (src/sr/formulas.test.ts).
-// Add a formula the same way: cite its line, take the multipliers it reads,
-// and record its golden values in tools/golden/formulas-recorder.ts.
+// It does the game's arithmetic in the game's order, so it matches the
+// golden values from ns.formulas.* to the last bit (src/sr/formulas.test.ts).
+// BitNode multipliers are an input (NodeMults), never a global.
+// Add a formula the same way: cite its lines, take the multipliers it reads
+// as inputs, and record its golden values in tools/golden/formulas-recorder.ts.
 //
-// RAM: this module is imported by run scripts, and the game charges any
-// identifier named like an NS function. Never name anything here hack, grow,
-// weaken, share, getServer..., getHackTime and the like; the test
-// "costs no RAM to import" prices the whole module.
+// RAM: run scripts import this module, and the game charges any identifier
+// named like an NS function. Never name anything here hack, grow, weaken,
+// share, getServer..., getHackTime and the like; the RAM test in
+// formulas.test.ts prices every export.
 
 /** The BitNode multipliers these formulas read (src/BitNode/BitNodeMultipliers.ts). */
 export interface NodeMults {
@@ -40,7 +42,7 @@ export const NEUTRAL_MULTS: Readonly<NodeMults> = {
   CloudServerMaxRam: 1,
 };
 
-/** The server fields the hacking formulas read; ns.getServer's result fits. */
+/** The server fields the hacking formulas read, as ns.getServer gives them for a normal server. */
 export interface Target {
   hasAdminRights: boolean;
   hackDifficulty: number;
@@ -51,7 +53,7 @@ export interface Target {
   moneyMax: number;
 }
 
-/** The person fields the hacking formulas read; ns.getPlayer's result fits. */
+/** The person fields the hacking formulas read, as ns.getPlayer gives them. */
 export interface Hacker {
   skills: { hacking: number; intelligence: number };
   mults: { hacking_chance: number; hacking_exp: number; hacking_money: number; hacking_speed: number; hacking_grow: number };
@@ -245,7 +247,7 @@ export function expForSkill(skill: number, mult: number): number {
 
 /**
  * The hacking level `exp` gives: skillFromExp with the player's hacking mult
- * times the BitNode's HackingLevelMultiplier. src/PersonObjects/Person.ts:62-65.
+ * times the BitNode's HackingLevelMultiplier. src/PersonObjects/Person.ts:60-63.
  */
 export function hackingLevel(exp: number, hackingMult: number, bn: NodeMults): number {
   return skillFromExp(exp, hackingMult * bn.HackingLevelMultiplier);
