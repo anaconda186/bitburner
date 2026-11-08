@@ -17,3 +17,5 @@ runs/
 .dev/
 # lab saves: edited saves for measuring the game, never milestone saves
 lab-saves/
+# Python bytecode (the research models)
+__pycache__/
