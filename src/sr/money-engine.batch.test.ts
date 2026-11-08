@@ -308,7 +308,7 @@ describe("which stage", () => {
     const jobs = schedule(snapAt(T0, fleet(25, 1024), [t]), orders());
     for (const j of jobs.filter((x) => x.target === "phantasy")) {
       const ms = j.script === HACK_JOB ? hackTimeMs(t, P300, NEUTRAL_MULTS) : j.script === WEAKEN_JOB ? weakenTimeMs(t, P300, NEUTRAL_MULTS) : 3.2 * hackTimeMs(t, P300, NEUTRAL_MULTS);
-      expect(j.landsAtMs - T0 - j.additionalMsec).toBeCloseTo(ms, 6);
+      expect(j.landsAtMs - T0 - j.additionalMsec).toBeCloseTo(ms, 3); // (a slot a rounding error early gets additionalMsec 0: the game refuses a negative one)
     }
   });
 });

@@ -66,7 +66,7 @@ describe("the RAM split", () => {
     // 50 GB / 1.7 GB = 29.4 threads.
     const s = snap({ hosts: [{ host: "big", maxRamGb: 100, usedRamGb: 0 }] });
     const jobs = schedule(s, { split: { money: 0.5, exp: 0.5, sharing: 0 }, homeReserveGb: 0, mults: NEUTRAL_MULTS });
-    expect(jobs.reduce((n, j) => n + j.threads, 0)).toBe(29);
+    expect(jobs.filter((j) => j.purpose === "drain").reduce((n, j) => n + j.threads, 0)).toBe(29);
   });
 
   test("the fraction is of all the engine's RAM, counting what its jobs in flight already hold", () => {
@@ -175,13 +175,20 @@ describe("never over the RAM it is given", () => {
       const s = snap({ hosts, targets, player: player(1 + Math.floor(rand() * 300)) });
       const jobs = schedule(s, { split: { money, exp: 1 - money, sharing: 0 }, homeReserveGb: 0, mults: NEUTRAL_MULTS });
       const pool = hosts.reduce((gb, h) => gb + h.maxRamGb - h.usedRamGb, 0);
-      expect(ramOf(jobs)).toBeLessThanOrEqual(money * pool + 1e-6);
+      const drained = jobs.filter((j) => j.purpose === "drain");
+      const farmed = jobs.filter((j) => j.purpose === "farm" || j.purpose === "farmPrep");
+      expect(drained.length + farmed.length).toBe(jobs.length);
+      expect(ramOf(drained)).toBeLessThanOrEqual(money * pool + 1e-6);
+      expect(ramOf(farmed)).toBeLessThanOrEqual((1 - money) * pool + 1e-6);
       for (const h of hosts) {
         expect(ramOf(jobs.filter((j) => j.host === h.host))).toBeLessThanOrEqual(h.maxRamGb - h.usedRamGb + 1e-6);
       }
-      const rich = new Set(targets.filter((t) => t.moneyAvailable >= 1 && t.requiredHackingSkill <= s.player.skills.hacking).map((t) => t.host));
+      const level = s.player.skills.hacking;
+      const rich = new Set(targets.filter((t) => t.moneyAvailable >= 1 && t.requiredHackingSkill <= level).map((t) => t.host));
+      const reachable = new Set(targets.filter((t) => t.requiredHackingSkill <= level).map((t) => t.host));
+      for (const j of farmed) expect(reachable.has(j.target)).toBe(true);
       for (const j of jobs) {
-        expect(rich.has(j.target)).toBe(true);
+        if (j.purpose === "drain") expect(rich.has(j.target)).toBe(true);
         expect(j.threads).toBeGreaterThanOrEqual(1);
         expect(Number.isInteger(j.threads)).toBe(true);
       }
