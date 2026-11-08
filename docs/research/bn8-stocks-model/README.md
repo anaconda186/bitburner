@@ -7,6 +7,8 @@ The script behind the numbers in [BN8: the fastest way to destroy it on stocks a
 | `market_sim.py` | The market (33 stocks, tick, forecast drift, trade effects) and the traders. `python market_sim.py` runs the table (several minutes); `python market_sim.py quick` runs 6 seeds |
 | `stocks_data.py` | The stock table, generated from `InitStockMetadata.ts` at tag v3.0.1 |
 | `out.txt` | The output the findings quote |
+| `golden.py` | Exports `golden.json`: markets the model's oracle and price-only traders saw, with what they did. The trader's unit tests (`src/sr/trades.model.test.ts`, #72) check that `decideTrades` agrees with them in direction. `python golden.py` regenerates it |
+| `golden.json` | The exported cases |
 
 Needs Python 3 and numpy.
 
