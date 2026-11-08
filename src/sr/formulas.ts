@@ -250,3 +250,27 @@ export function expForSkill(skill: number, mult: number): number {
 export function hackingLevel(exp: number, hackingMult: number, bn: NodeMults): number {
   return skillFromExp(exp, hackingMult * bn.HackingLevelMultiplier);
 }
+
+/**
+ * The most RAM a cloud server can have: 2^20 GB × CloudServerMaxRam, rounded
+ * down to a power of 2 (ns.cloud.getRamLimit). src/Server/ServerPurchases.ts:100-105,
+ * 2^20 from src/Server/data/Constants.ts:13. 0 if that rounds below 1 GB.
+ */
+export function cloudServerMaxRam(bn: NodeMults): number {
+  const ram = Math.round(1048576 * bn.CloudServerMaxRam);
+  return ram < 1 ? 0 : 2 ** Math.floor(Math.log2(ram));
+}
+
+/**
+ * The price of a cloud server with `ram` GB: ram × $55,000 × CloudServerCost ×
+ * CloudServerSoftcap^(log2(ram) − 6, when positive) (ns.cloud.getServerCost).
+ * src/Server/ServerPurchases.ts:23-42, $55,000 from src/Server/data/Constants.ts:4.
+ * Infinity unless ram (rounded) is a power of 2 no larger than cloudServerMaxRam.
+ * Upgrading costs the difference of two prices (src/Server/ServerPurchases.ts:44-54).
+ */
+export function cloudServerCost(ram: number, bn: NodeMults): number {
+  const gb = Math.round(ram);
+  if (!(gb >= 1) || !Number.isInteger(Math.log2(gb)) || gb > cloudServerMaxRam(bn)) return Infinity;
+  const softcapSteps = Math.max(0, Math.log2(gb) - 6);
+  return gb * 55000 * bn.CloudServerCost * bn.CloudServerSoftcap ** softcapSteps;
+}
