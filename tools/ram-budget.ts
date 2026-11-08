@@ -82,4 +82,21 @@ export const RAM_BUDGETS: BudgetTable = {
   // Only BN8 starts it, which the gate's presets price like any BitNode
   // after the BN4 front (no Singularity here, so the context changes nothing).
   "sr/h/trader.js": { budget: 26.8, contexts: ["SF4.3"] },
+  // #53: the root action helper. Base 1.6, nuke and the five port openers
+  // 0.05 each: 1.90, a hair over in the float sum, hence 1.95.
+  "sr/h/root.js": { budget: 1.95, contexts: EVERYWHERE },
+  // #53: the money engine worker (spec: "about 4.5 GB"). Base 1.6, exec 1.3,
+  // scp 0.6, getPlayer 0.5, scan 0.2, getServerMoneyAvailable,
+  // getServerSecurityLevel and getServerRequiredHackingLevel 0.1 each,
+  // hasRootAccess, getServerMaxRam and getServerUsedRam 0.05 each; self and
+  // the ports are free. No field may be called share (ns.share, 2.4): the
+  // split's share part is `sharing`.
+  "sr/h/engine.js": { budget: 4.65, contexts: EVERYWHERE },
+  // #53: the job scripts the engine execs, one call each on top of the base
+  // 1.6 (hack 0.1, grow and weaken 0.15). hack's 1.70 is a hair over in the
+  // float sum, hence 1.75 for all three. JOB_RAM_GB in src/sr/money-engine.ts
+  // holds their per-thread cost (money-engine.ram.test.ts checks it).
+  "sr/j/hack.js": { budget: 1.75, contexts: EVERYWHERE },
+  "sr/j/grow.js": { budget: 1.75, contexts: EVERYWHERE },
+  "sr/j/weaken.js": { budget: 1.75, contexts: EVERYWHERE },
 };

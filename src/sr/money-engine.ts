@@ -30,11 +30,11 @@ export const JOB_RAM_GB: Readonly<Record<JobScript, number>> = {
 
 /**
  * How the engine's RAM is shared out (spec #41 "RAM split kinds"): the
- * fraction for money, for hacking exp and for share. All 0 is "off".
+ * fraction for money, for hacking exp and for share (`sharing`: a field called `share` would be charged as ns.share, 2.4 GB). All 0 is "off".
  */
-export type RamSplit = { readonly money: number; readonly exp: number; readonly share: number };
-export const SPLIT_OFF: RamSplit = { money: 0, exp: 0, share: 0 };
-export const SPLIT_MONEY: RamSplit = { money: 1, exp: 0, share: 0 };
+export type RamSplit = { readonly money: number; readonly exp: number; readonly sharing: number };
+export const SPLIT_OFF: RamSplit = { money: 0, exp: 0, sharing: 0 };
+export const SPLIT_MONEY: RamSplit = { money: 1, exp: 0, sharing: 0 };
 
 /** What the conductor keeps on the engine's control port. */
 export type EngineOrders = {
@@ -57,10 +57,10 @@ export function readOrders(raw: unknown): EngineOrders {
   if (typeof raw !== "object" || raw === null) return ORDERS_OFF;
   const { split, homeReserveGb } = raw as { split?: unknown; homeReserveGb?: unknown };
   if (typeof split !== "object" || split === null) return ORDERS_OFF;
-  const { money, exp, share } = split as Record<string, unknown>;
-  if (!isShare(money) || !isShare(exp) || !isShare(share) || money + exp + share > 1 + RAM_EPSILON) return ORDERS_OFF;
+  const { money, exp, sharing } = split as Record<string, unknown>;
+  if (!isShare(money) || !isShare(exp) || !isShare(sharing) || money + exp + sharing > 1 + RAM_EPSILON) return ORDERS_OFF;
   if (typeof homeReserveGb !== "number" || !(homeReserveGb >= 0)) return ORDERS_OFF;
-  return { split: { money, exp, share }, homeReserveGb };
+  return { split: { money, exp, sharing }, homeReserveGb };
 }
 
 /** A job is dropped from the in-flight book this long after it should have landed (timers only fire late). */

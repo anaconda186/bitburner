@@ -133,7 +133,7 @@ const sameOrders = (a: EngineOrders, b: EngineOrders): boolean =>
   a.homeReserveGb === b.homeReserveGb &&
   a.split.money === b.split.money &&
   a.split.exp === b.split.exp &&
-  a.split.share === b.split.share;
+  a.split.sharing === b.split.sharing;
 
 /**
  * The money engine: its orders go on its control port whenever the port reads

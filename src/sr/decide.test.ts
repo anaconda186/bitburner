@@ -92,7 +92,7 @@ describe("decide: only helpers that fit the free RAM", () => {
       for (let h = 0; h < Math.floor(rand() * 4); h++) freeRamGb[`s${h}`] = Math.round(rand() * 400) / 100;
       const cost = Math.round(rand() * 400) / 100;
       const s = snap({ freeRamGb, helperRamGb: { [NETWORK]: cost } });
-      for (const a of decide(s)) expect(freeRamGb[a.host]).toBeGreaterThanOrEqual(cost);
+      for (const a of decide(s)) if ("host" in a) expect(freeRamGb[a.host]).toBeGreaterThanOrEqual(cost);
     }
   });
 });
