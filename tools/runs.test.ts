@@ -1,5 +1,7 @@
 // Run records out of the game (seam E): state files in, the watcher's log,
 // exports and the live table out.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   exportName,
@@ -7,6 +9,7 @@ import {
   liveTable,
   parseRun,
   rolledBack,
+  RUNS_DIR,
   watchState,
   watchedMs,
   WATCH_GAP_MS,
@@ -99,12 +102,21 @@ describe("the live table", () => {
     expect(lines.at(-1)).toBe("rollbacks: 1 (bn1.1:y), watched 0:02:00 of 0:40:00");
   });
 
+  test("counts a watcher that read the file only once as no watcher", () => {
+    expect(table(watchAll([two])).at(-1)).toBe("rollbacks unobserved");
+  });
+
   test("says when there is no split yet", () => {
     expect(liveTable(START, T0 + MIN, null)).toContain("no milestone yet");
   });
 });
 
 describe("exports", () => {
+  test("go to a folder git ignores, so run data never lands in the public repo", () => {
+    const ignored = readFileSync(join(import.meta.dirname, "..", ".gitignore"), "utf8").split(/\r?\n/);
+    expect(ignored).toContain(`${RUNS_DIR}/`);
+  });
+
   const done = at(at(START, "bn1.1", 10), "bn2.1", 20);
 
   test("are named by the run's start date, its category and its build", () => {
@@ -112,8 +124,12 @@ describe("exports", () => {
     expect(exportName({ ...done, category: "strict", buildSha: "unknown" })).toBe("2026-11-07T120000Z-strict-unknown.json");
   });
 
+  test("of a run read only once (a one-off export) read back as unwatched", () => {
+    expect(parseRun(exportText(done, watchAll([done]), T0))).toMatchObject({ ok: true, run: { watch: null } });
+  });
+
   test("read back as the same run, with the watcher's log", () => {
-    const watch = watchAll([done]);
+    const watch = watchAll([done, done]);
     const r = parseRun(exportText(done, watch, T0 + 30 * MIN));
     expect(r).toEqual({ ok: true, run: { state: done, watch } });
   });

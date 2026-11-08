@@ -79,7 +79,7 @@ export function exportName(state: RunState): string {
 
 /** An export's text: the state file as read, and the watcher's log (null when none was attached). */
 export function exportText(state: RunState, watch: WatchLog | null, nowMs: number): string {
-  return JSON.stringify({ export: EXPORT_FORMAT, exportedAt: nowMs, state, watch }, null, 2) + "\n";
+  return JSON.stringify({ export: EXPORT_FORMAT, exportedAt: nowMs, state, watch: attached(watch) }, null, 2) + "\n";
 }
 
 export type RunResult = { ok: true; run: RunRecord } | { ok: false; error: string };
@@ -109,13 +109,22 @@ export function parseRun(text: string): RunResult {
   if (!parsed.ok) return { ok: false, error: `run file: ${parsed.error}` };
   const watch = wrapped && wrapper.watch != null ? wrapper.watch : null;
   if (watch !== null && !isLog(watch)) return { ok: false, error: "run file has a watcher log it can't read" };
-  const log = watch !== null && watch.startedAt === parsed.state.startedAt ? watch : null;
+  const log = watch !== null && watch.startedAt === parsed.state.startedAt ? attached(watch) : null;
   return { ok: true, run: { state: parsed.state, watch: log } };
 }
 
 /** How long the watcher was reading the state file. */
 export function watchedMs(log: WatchLog): number {
   return log.windows.reduce((sum, w) => sum + (w.toMs - w.fromMs), 0);
+}
+
+/**
+ * The log if the watcher really watched: a log of a single read (a one-off
+ * export, say) watched for no time and could have seen no rollback, so it
+ * counts as no watcher at all.
+ */
+export function attached(log: WatchLog | null): WatchLog | null {
+  return log !== null && watchedMs(log) > 0 ? log : null;
 }
 
 /** What the rollback watcher saw of a run, or null when none was attached. */
@@ -139,7 +148,8 @@ const money = (n: number) => (Math.abs(n) >= 1e6 ? n.toExponential(2).replace("e
  * split, the build, installs and stats), the splits the watcher saw rolled
  * back, and what it saw of rollbacks.
  */
-export function liveTable(state: RunState, nowMs: number, watch: WatchLog | null): string[] {
+export function liveTable(state: RunState, nowMs: number, log: WatchLog | null): string[] {
+  const watch = attached(log);
   const time = runTime(state, nowMs);
   const started = new Date(state.startedAt).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
   const head = [

@@ -13,7 +13,7 @@ import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { formatDuration } from "../src/sr/splits.ts";
 import { splitTime, type BuildRecord, type RunState, type Split, type Times } from "../src/sr/state.ts";
-import { layOut, parseRun, rollbackText, rolledBack, watchedMs, type Rollbacks, type RunRecord } from "./runs.ts";
+import { attached, layOut, parseRun, rollbackText, rolledBack, watchedMs, type Rollbacks, type RunRecord } from "./runs.ts";
 
 /** One run's side of a row. */
 export type Side = {
@@ -126,7 +126,8 @@ function buildsBetween(state: RunState, fromMs: number, toMs: number): string[] 
 }
 
 function summary(run: RunRecord): RunSummary {
-  const { state, watch } = run;
+  const { state } = run;
+  const watch = attached(run.watch);
   const builds = [state.buildSha, ...(state.builds as readonly BuildRecord[]).map((c) => c.sha)];
   const rollbacks: Rollbacks = watch
     ? { seen: rolledBack(watch, state), watchedMs: watchedMs(watch), runMs: state.updatedAt - state.startedAt }
