@@ -131,3 +131,78 @@ export function growTimeMs(t: Target, p: Hacker, bn: NodeMults): number {
 export function weakenTimeMs(t: Target, p: Hacker, bn: NodeMults): number {
   return 4 * hackSeconds(t, p, bn) * 1000;
 }
+
+/** The thread bonus for running on a host with `cores` cores. src/Server/ServerHelpers.ts:287-290. */
+export function coreBonus(cores: number): number {
+  return 1 + (cores - 1) / 16;
+}
+
+/** Per-thread growth is capped at log1p(0.0035) (src/Server/data/Constants.ts:8). */
+const MAX_GROW_LOG = 0.00349388925425578;
+
+/**
+ * The natural log of a grow's money multiplier. src/Server/formulas/grow.ts:8-29.
+ * The thread count is multiplied in last, as there, so that this rounds the
+ * same way for n threads as n × the 1-thread value.
+ */
+function growLog(t: Target, p: Hacker, threads: number, cores: number, bn: NodeMults): number {
+  if (!t.serverGrowth) return -Infinity;
+  const perThread = Math.min(Math.log1p(0.03 / t.hackDifficulty), MAX_GROW_LOG);
+  const growth = (t.serverGrowth / 100) * bn.ServerGrowthRate;
+  return perThread * growth * p.mults.hacking_grow * coreBonus(cores) * Math.max(threads, 0);
+}
+
+/**
+ * The multiplier a grow of `threads` applies to the server's money, before the
+ * +$1 per thread (ns.formulas.hacking.growPercent). src/Server/formulas/grow.ts:31-34.
+ * 0 for a server that can't grow.
+ */
+export function growFactor(t: Target, p: Hacker, threads: number, cores: number, bn: NodeMults): number {
+  if (!t.serverGrowth) return 0;
+  return Math.exp(growLog(t, p, threads, cores, bn));
+}
+
+/**
+ * The server's money after a grow of `threads`: (money + threads) × the grow
+ * multiplier (at least 1), capped at moneyMax (ns.formulas.hacking.growAmount).
+ * src/Server/formulas/grow.ts:38-58.
+ */
+export function grownMoney(t: Target, p: Hacker, threads: number, cores: number, bn: NodeMults): number {
+  const factor = Math.max(growFactor(t, p, threads, cores, bn), 1);
+  const money = (t.moneyAvailable + threads) * factor;
+  return money > t.moneyMax || Number.isNaN(money) ? t.moneyMax : money;
+}
+
+/**
+ * The fewest threads of one grow that take the server from its moneyAvailable
+ * to `targetMoney` (capped at moneyMax) (ns.formulas.hacking.growThreads).
+ * Same answer as src/Server/ServerHelpers.ts:90-199 (numCycleForGrowthCorrected):
+ * 0 when there is nothing to grow, Infinity for a server that can't grow.
+ *
+ * After n threads the money is (start + n)·e^(k·n), k being the 1-thread grow
+ * log. Newton's method on ln((start + x)/goal) + k·x finds the real root; the
+ * answer is the first integer at or above it that reaches the goal, checked
+ * with the very expression grownMoney uses.
+ */
+export function growThreadsFor(t: Target, p: Hacker, targetMoney: number, cores: number, bn: NodeMults): number {
+  if (!t.serverGrowth) return Infinity;
+  const start = Math.max(t.moneyAvailable, 0);
+  const goal = Math.min(targetMoney, t.moneyMax);
+  if (goal <= start) return 0;
+  const k = growLog(t, p, 1, cores, bn);
+  const reaches = (n: number) => goal <= (start + n) * Math.exp(k * n);
+  // Starting left of the root, Newton climbs to it without overshooting.
+  let x = (goal - start) / (1 + goal * k);
+  for (let i = 0; i < 100; i++) {
+    const money = start + x;
+    const next = (x - money * Math.log(money / goal)) / (1 + money * k);
+    const step = next - x;
+    x = next;
+    if (Math.abs(step) < 1e-3) break;
+  }
+  if (!Number.isFinite(x)) return Infinity;
+  let n = Math.max(Math.ceil(x), 1);
+  for (let i = 0; i < 4 && n > 1 && reaches(n - 1); i++) n--;
+  for (let i = 0; i < 4 && !reaches(n); i++) n++;
+  return n;
+}

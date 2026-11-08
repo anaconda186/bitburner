@@ -9,6 +9,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  growFactor,
+  growThreadsFor,
+  grownMoney,
   growTimeMs,
   hackChance,
   hackExp,
@@ -75,5 +78,17 @@ describe.each(fixture.contexts)("golden values: $name", (ctx) => {
     expect(misses(h, (c) => hackTimeMs(c.server, c.person, ctx.nodeMults), (c) => c.out.hackTime!)).toEqual([]);
     expect(misses(h, (c) => growTimeMs(c.server, c.person, ctx.nodeMults), (c) => c.out.growTime!)).toEqual([]);
     expect(misses(h, (c) => weakenTimeMs(c.server, c.person, ctx.nodeMults), (c) => c.out.weakenTime!)).toEqual([]);
+  });
+  it("grow multiplier", () => {
+    const ours = (c: HackingCase) => growFactor(c.server, c.person, c.threads, c.cores, ctx.nodeMults);
+    expect(misses(h, ours, (c) => c.out.growPercent!)).toEqual([]);
+  });
+  it("money after a grow", () => {
+    const ours = (c: HackingCase) => grownMoney(c.server, c.person, c.threads, c.cores, ctx.nodeMults);
+    expect(misses(h, ours, (c) => c.out.growAmount!)).toEqual([]);
+  });
+  it("grow threads, exactly", () => {
+    const ours = (c: HackingCase) => growThreadsFor(c.server, c.person, c.targetMoney, c.cores, ctx.nodeMults);
+    expect(misses(h, ours, (c) => c.out.growThreads!, true)).toEqual([]);
   });
 });
