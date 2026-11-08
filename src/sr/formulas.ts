@@ -53,6 +53,12 @@ export interface Target {
   moneyMax: number;
 }
 
+/**
+ * The fields the hack chance, fraction and times read: all a caller needs to
+ * hand them (the money engine reads just these, one cheap call each).
+ */
+export type HackTarget = Pick<Target, "hasAdminRights" | "hackDifficulty" | "requiredHackingSkill">;
+
 /** The person fields the hacking formulas read, as ns.getPlayer gives them. */
 export interface Hacker {
   skills: { hacking: number; intelligence: number };
@@ -70,13 +76,13 @@ export function intelligenceBonus(intelligence: number, weight = 1): number {
 }
 
 /** The fraction of security still in the way: 0 at 100 security, 1 at none. */
-const securityFactor = (t: Target): number => (100 - t.hackDifficulty) / 100;
+const securityFactor = (t: HackTarget): number => (100 - t.hackDifficulty) / 100;
 
 /**
  * Chance (0..1) that one hack succeeds. src/Hacking.ts:9-24. Reads no BitNode
  * multiplier. 0 without root or at security 100 and above.
  */
-export function hackChance(t: Target, p: Hacker): number {
+export function hackChance(t: HackTarget, p: Hacker): number {
   if (!t.hasAdminRights || t.hackDifficulty >= 100) return 0;
   const skill = Math.max(1.75 * p.skills.hacking, 1);
   const bySkill = (skill - t.requiredHackingSkill) / skill;
@@ -99,7 +105,7 @@ export function hackExp(t: Target, p: Hacker, bn: NodeMults): number {
  * src/Hacking.ts:44-57 (ns.formulas.hacking.hackPercent). 0 at security 100
  * and above, and when the skill is below the server's requirement.
  */
-export function hackFraction(t: Target, p: Hacker, bn: NodeMults): number {
+export function hackFraction(t: HackTarget, p: Hacker, bn: NodeMults): number {
   if (t.hackDifficulty >= 100) return 0;
   const hacking = p.skills.hacking;
   const bySkill = (hacking - (t.requiredHackingSkill - 1)) / hacking;
@@ -107,12 +113,28 @@ export function hackFraction(t: Target, p: Hacker, bn: NodeMults): number {
   return Math.min(1, Math.max(fraction, 0));
 }
 
+/** Security each hack thread adds (src/Server/data/Constants.ts:9, ServerFortifyAmount). */
+const FORTIFY_PER_THREAD = 0.002;
+
+/**
+ * Security a successful hack of `threads` adds to its server, where `fraction`
+ * is one thread's share of the money (hackFraction at the moment it lands):
+ * 0.002 per thread, but no more threads are counted than it takes to steal
+ * everything, ceil(1/fraction). src/Netscript/NetscriptHelpers.tsx:567-572 and
+ * :613 (ns.hackAnalyzeSecurity with a host, src/NetscriptFunctions.ts:230-244).
+ * A failed hack adds nothing. The game caps security at 100 (src/Server/Server.ts:91-103).
+ */
+export function hackSecurityRise(threads: number, fraction: number): number {
+  const counted = fraction > 0 ? Math.min(threads, Math.ceil(1 / fraction)) : threads;
+  return FORTIFY_PER_THREAD * counted;
+}
+
 /**
  * One hack's duration in seconds, as the game computes it before formulas
  * turns it into ms. src/Hacking.ts:60-80. Darknet servers take a fixed 16 s
  * (:61), which this model doesn't cover.
  */
-function hackSeconds(t: Target, p: Hacker, bn: NodeMults): number {
+function hackSeconds(t: HackTarget, p: Hacker, bn: NodeMults): number {
   const difficulty = t.requiredHackingSkill * t.hackDifficulty;
   const skillFactor = (2.5 * difficulty + 500) / (p.skills.hacking + 50);
   const speed = p.mults.hacking_speed * bn.HackingSpeedMultiplier * intelligenceBonus(p.skills.intelligence);
@@ -120,17 +142,17 @@ function hackSeconds(t: Target, p: Hacker, bn: NodeMults): number {
 }
 
 /** One hack's duration in ms (ns.formulas.hacking.hackTime). src/Hacking.ts:60, ×1000 at src/NetscriptFunctions/Formulas.ts:224. */
-export function hackTimeMs(t: Target, p: Hacker, bn: NodeMults): number {
+export function hackTimeMs(t: HackTarget, p: Hacker, bn: NodeMults): number {
   return hackSeconds(t, p, bn) * 1000;
 }
 
 /** One grow's duration in ms: 3.2 hacks. src/Hacking.ts:83-87, ×1000 at src/NetscriptFunctions/Formulas.ts:230. */
-export function growTimeMs(t: Target, p: Hacker, bn: NodeMults): number {
+export function growTimeMs(t: HackTarget, p: Hacker, bn: NodeMults): number {
   return 3.2 * hackSeconds(t, p, bn) * 1000;
 }
 
 /** One weaken's duration in ms: 4 hacks. src/Hacking.ts:90-94, ×1000 at src/NetscriptFunctions/Formulas.ts:236. */
-export function weakenTimeMs(t: Target, p: Hacker, bn: NodeMults): number {
+export function weakenTimeMs(t: HackTarget, p: Hacker, bn: NodeMults): number {
   return 4 * hackSeconds(t, p, bn) * 1000;
 }
 
