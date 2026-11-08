@@ -47,7 +47,11 @@ function snapAt(nowMs: number, hosts: HostView[], targets: TargetView[], inFligh
 type Landing = { atMs: number; script: Job["script"]; money: number; security: number };
 
 /** Runs the engine against a simulated game for `seconds`. */
-function simulate(opts: { hosts: HostView[]; target: TargetView; seconds: number; mults?: NodeMults; inFlight?: Job[] }) {
+function simulate(opts: {
+  hosts: HostView[]; target: TargetView; seconds: number; mults?: NodeMults; inFlight?: Job[];
+  /** More hosts that appear this many seconds in (a server bought mid-run). */
+  later?: { atS: number; hosts: HostView[] };
+}) {
   const mults = opts.mults ?? NEUTRAL_MULTS;
   let t = { ...opts.target };
   const unlanded: Job[] = [...(opts.inFlight ?? [])];
@@ -78,7 +82,8 @@ function simulate(opts: { hosts: HostView[]; target: TargetView; seconds: number
     }
     const used = new Map<string, number>();
     for (const j of unlanded) used.set(j.host, (used.get(j.host) ?? 0) + j.threads * JOB_RAM_GB[j.script]);
-    const hosts = opts.hosts.map((h) => ({ ...h, usedRamGb: h.usedRamGb + (used.get(h.host) ?? 0) }));
+    const all = opts.later !== undefined && nowMs - T0 >= opts.later.atS * 1000 ? [...opts.hosts, ...opts.later.hosts] : opts.hosts;
+    const hosts = all.map((h) => ({ ...h, usedRamGb: h.usedRamGb + (used.get(h.host) ?? 0) }));
     heldGb.push(ramOf(unlanded));
     book = stillInFlight(book, nowMs);
     const jobs = schedule(snapAt(nowMs, hosts, [t], book, mults), orders(mults));
@@ -226,6 +231,32 @@ describe("drift", () => {
     }
     // The first landing of all is the repair's weaken, before any hack.
     expect(run.landings[0]?.script).toBe(WEAKEN_JOB);
+  });
+
+  test("RAM that comes free while a target is prepared doesn't stall the pipeline once it's ready (#57's in-game drain)", () => {
+    // #57's 15-minute run: 24 × 1 TB, phantasy from base security. Batches
+    // launched before the repair weaken lands take the weaken time at base
+    // security (414 s); once it lands they take 129 s. A batch launched late
+    // in the prep, on RAM that came free (here a server bought at +200 s),
+    // lands far beyond where any batch launched after the prep can, and the
+    // engine launched nothing until time caught up with it: the pipeline ran
+    // dry for over a minute. Batches now fill the free slots before it.
+    const run = simulate({
+      hosts: fleet(24, 1024),
+      target: phantasy({ hackDifficulty: 27, moneyAvailable: 20e6 }),
+      seconds: 800,
+      later: { atS: 200, hosts: [{ host: "sr-99", maxRamGb: 1024, usedRamGb: 0 }] },
+    });
+    const hacks = run.landings.filter((l) => l.script === HACK_JOB).map((l) => l.atMs);
+    expect(hacks.length).toBeGreaterThan(300);
+    const gaps = hacks.slice(1).map((t, i) => t - (hacks[i] as number));
+    // The one gap left: from the prep's last batch to the first one launched
+    // once the target was ready, about 14 s (it was 84 s).
+    expect(Math.max(...gaps)).toBeLessThan(20_000);
+    for (const l of run.landings.filter((x) => x.script === HACK_JOB)) {
+      expect(l.security).toBeCloseTo(7, 9);
+      expect(l.money).toBeCloseTo(600e6, 0);
+    }
   });
 
   test("launches nothing on the target while one of its jobs is about to land (its duration would be read wrong)", () => {

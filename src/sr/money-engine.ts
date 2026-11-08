@@ -613,15 +613,20 @@ function batches(s: EngineSnapshot, choice: Choice, free: Map<string, number>, b
   const onTarget = s.inFlight.filter((j) => j.target === t.host);
   if (onTarget.some((j) => Math.abs(j.landsAtMs - s.nowMs) <= tun.guardMs)) return [];
   const toLand = onTarget.filter((j) => j.landsAtMs > s.nowMs);
-  let st = after(t, { money: t.moneyAvailable, security: t.hackDifficulty }, toLand, s);
-  const lastLanding = Math.max(-Infinity, ...onTarget.map((j) => j.landsAtMs));
+  const read: TargetState = { money: t.moneyAvailable, security: t.hackDifficulty };
   const earliest = s.nowMs + weakenTimeMs(t, s.player, s.mults);
-  const quiet = tun.spacingMs - 3 * tun.landGapMs;
-  let slot = Math.max(earliest, lastLanding + quiet);
+  const span = 3 * tun.landGapMs;
+  const quiet = tun.spacingMs - span;
+  const landings = onTarget.map((j) => j.landsAtMs);
   const jobs: Job[] = [];
   let budget = budgetGb;
   let hacking = toLand.some((j) => j.script === HACK_JOB);
-  while (slot <= earliest + tun.launchAheadMs) {
+  for (let slot = freeSlot(landings, earliest, span, quiet); slot <= earliest + tun.launchAheadMs; slot = freeSlot(landings, slot + tun.spacingMs, span, quiet)) {
+    // Planned on the target as everything landing before this slot leaves it.
+    // A slot may come before jobs already on their way (ones launched while
+    // the target's security, and so their durations, were higher): a batch
+    // leaves the target as it found it, so they land as planned.
+    const st = after(t, read, [...toLand, ...jobs].filter((j) => j.landsAtMs < slot), s);
     if (hacking ? badlyDrifted(t, st, tun) : drifted(t, st)) {
       jobs.push(...repairWave(s, t, st, slot, free, budget, tun));
       break;
@@ -657,12 +662,25 @@ function batches(s: EngineSnapshot, choice: Choice, free: Map<string, number>, b
     const placed = chosen === undefined ? undefined : placeParts(s, t, free, chosen, budget);
     if (placed === undefined) break;
     jobs.push(...placed);
+    landings.push(...placed.map((j) => j.landsAtMs));
     budget -= ramOf(placed);
-    st = after(t, st, placed, s);
-    slot += tun.spacingMs;
     hacking = true;
   }
   return jobs;
+}
+
+/**
+ * The first slot from `from` whose landings (`span` long) keep `quiet` clear
+ * of every landing on the target: before it, so a launch finds a quiet window
+ * between batches, and after it, so the next batch starts a spacing later.
+ */
+function freeSlot(landings: readonly number[], from: number, span: number, quiet: number): number {
+  let slot = from;
+  for (;;) {
+    const clash = landings.filter((l) => l > slot - quiet && l < slot + span + quiet);
+    if (clash.length === 0) return slot;
+    slot = Math.max(...clash) + quiet;
+  }
 }
 
 /**
