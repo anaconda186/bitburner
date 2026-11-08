@@ -83,7 +83,7 @@ export function decide(snapshot: Snapshot): readonly Action[] {
   const wants: Want[] = staleProbes(snapshot).map((name) => ({ kind: "probe", name }));
   const rooting = rootWant(snapshot);
   if (rooting !== undefined) wants.push(rooting);
-  const purchase = fleetWant(snapshot);
+  const purchase = fleetWant(snapshot, engineOrders(snapshot));
   if (purchase !== undefined) wants.push(purchase);
   wants.push(...engineWants(snapshot));
   if (traderWanted(snapshot) && startDue(snapshot.workers.trader, snapshot.nowMs)) {

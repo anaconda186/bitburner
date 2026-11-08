@@ -17,10 +17,10 @@
 // 32 GB): this rule never buys it, but doubles it like any other once it
 // exists. RAM: the conductor imports this file; nothing here may be named
 // like an NS function (upgradeServer, purchaseServer, getServerCost ...).
-import { engineOrders, type Snapshot, type Want } from "./decide.ts";
+import type { Snapshot, Want } from "./decide.ts";
 import { cloudServerCost, type NodeMults } from "./formulas.ts";
 import { CALLS, type CloudServer, type FleetFacts, type HelperScript } from "./helpers.ts";
-import { readOutlook, type EngineOutlook } from "./money-engine.ts";
+import { readOutlook, type EngineOrders, type EngineOutlook } from "./money-engine.ts";
 
 /** The fleet's tunables (spec #41 "Tunables": fleet payback 10 min). */
 export const FLEET_TUNABLES = {
@@ -116,12 +116,13 @@ export function plannedAugReserve(_s: Snapshot): number {
 /**
  * The fleet's want this loop: one purchase call, or nothing. It needs a fleet
  * reading taken after the last purchase call, the engine's money split on
- * (not in BN8, nor before the route is read), and the engine's outlook.
- * Prices use the BitNode multipliers the engine is given.
+ * in `orders` (decide's engineOrders: not in BN8, nor before the route is
+ * read), and the engine's outlook. Prices use the BitNode multipliers in the
+ * orders. (`orders` is an argument, not computed here: importing decide.ts
+ * would close an import loop, which the game refuses to load.)
  */
-export function fleetWant(s: Snapshot, reserve: number = plannedAugReserve(s)): Want | undefined {
+export function fleetWant(s: Snapshot, orders: EngineOrders, reserve: number = plannedAugReserve(s)): Want | undefined {
   const reading = s.probes.fleet;
-  const orders = engineOrders(s);
   if (!(orders.split.money > 0) || reading?.ok !== true) return undefined;
   const mults = orders.mults;
   const last = s.lastCall;

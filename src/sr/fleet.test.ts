@@ -2,7 +2,7 @@
 // purchase out. Prices are worked by hand from ns.cloud.getServerCost:
 // ram × $55,000 × CloudServerCost × CloudServerSoftcap^(log2(ram) − 6).
 import { describe, expect, test } from "vitest";
-import { decide, type Snapshot } from "./decide.ts";
+import { decide, engineOrders, type Snapshot } from "./decide.ts";
 import { FLEET_TUNABLES, fleetWant } from "./fleet.ts";
 import type { Json } from "./helper-contract.ts";
 import { CALLS, PROBES, WORKERS } from "./helpers.ts";
@@ -126,9 +126,9 @@ describe("the fleet: payback and money", () => {
 
   test("skips it when the money is set aside for planned augmentations", () => {
     const s = snap(servers, { money: 1e6 });
-    expect(fleetWant(s, 0)).toMatchObject({ script: UPGRADE, arg: { host: "sr-24", ram: 32 } });
-    expect(fleetWant(s, 120_001)).toBeUndefined();
-    expect(fleetWant(s, 120_000)).toBeDefined();
+    expect(fleetWant(s, engineOrders(s), 0)).toMatchObject({ script: UPGRADE, arg: { host: "sr-24", ram: 32 } });
+    expect(fleetWant(s, engineOrders(s), 120_001)).toBeUndefined();
+    expect(fleetWant(s, engineOrders(s), 120_000)).toBeDefined();
   });
 });
 
