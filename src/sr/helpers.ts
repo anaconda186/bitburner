@@ -9,7 +9,9 @@
 //     value type in ProbeValues and how stale it may get;
 //   - an action helper (a call that changes the game) goes in CALLS.
 
+import type { Reply } from "./helper-contract.ts";
 import type { RouteFacts } from "./order.ts";
+import type { ResetTimes } from "./state.ts";
 
 /** Where every helper lives on home. */
 export type HelperScript = `sr/h/${string}.js`;
@@ -28,16 +30,34 @@ export interface ProbeValues {
    * counts at once, even when home is too full for this probe to run again.
    */
   network: { readonly hosts: readonly string[] };
-  /** The current BitNode and the owned Source-Files (#48): where the run is in the BitNode order. */
-  route: RouteFacts;
+  /**
+   * The current BitNode and the owned Source-Files (#48): where the run is in
+   * the BitNode order. Plus the game's reset times (#49), which tell a
+   * conductor start after a reset from one after a page reload.
+   */
+  route: RouteFacts & ResetTimes;
+  /** A split's stats (#49), all but the sleeves. */
+  stats: { readonly hack: number; readonly money: number; readonly M: number; readonly homeRam: number };
+  /** Sleeves owned (#49). Only launched where sleeves can exist (`sleevesPossible`). */
+  sleeves: { readonly count: number };
 }
 
 export type ProbeName = keyof ProbeValues;
+
+/** The probes' latest readings, as the snapshot holds them. */
+export type Readings = { readonly [P in ProbeName]?: Reply<ProbeValues[P]> };
 
 export interface ProbeSpec {
   readonly script: HelperScript;
   /** Launch the probe again once its last reading is this old. */
   readonly maxAgeMs: number;
+  /** Launch it only while this holds; without it, always. */
+  readonly onlyIf?: (readings: Readings) => boolean;
+}
+
+/** Sleeves exist in BN10 and wherever SF10 is owned; elsewhere their API throws. */
+export function sleevesPossible(route: RouteFacts): boolean {
+  return route.currentNode === 10 || (route.ownedSF[10] ?? 0) >= 1;
 }
 
 /** Probes take no argument: each fills one snapshot field, `snapshot.probes[name]`. */
@@ -46,6 +66,14 @@ export const PROBES: { readonly [P in ProbeName]: ProbeSpec } = {
   // Changes only at a reset, which also restarts the conductor; refreshed
   // once a minute so a failed reading is retried.
   route: { script: "sr/h/route.js", maxAgeMs: 60_000 },
+  // Read into each split; a split takes the latest reading.
+  stats: { script: "sr/h/stats.js", maxAgeMs: 30_000 },
+  // 5.6 GB, and its count changes rarely.
+  sleeves: {
+    script: "sr/h/sleeves.js",
+    maxAgeMs: 300_000,
+    onlyIf: (readings) => readings.route?.ok === true && sleevesPossible(readings.route.value),
+  },
 };
 
 /** Action helpers, by name. Launched one at a time and awaited. None yet. */

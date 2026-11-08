@@ -41,6 +41,27 @@ describe("decide: probes", () => {
   });
 });
 
+describe("decide: the sleeves probe", () => {
+  const SLEEVES = PROBES.sleeves.script;
+  const T = 1_700_000_000_000;
+  const route = (currentNode: number, ownedSF: Record<number, number> = {}) =>
+    ({ ok: true, value: { currentNode, ownedSF, lastAugReset: T, lastNodeReset: T }, atMs: T }) as const;
+  const sleevesWanted = (probes: Snapshot["probes"]) =>
+    decide(snap({ nowMs: T, probes, freeRamGb: { home: 64 }, helperRamGb: { [SLEEVES]: 5.6 } })).some(
+      (a) => a.kind === "probe" && a.name === "sleeves",
+    );
+
+  test("is not launched until the route is known, nor without SF10 outside BN10", () => {
+    expect(sleevesWanted({})).toBe(false);
+    expect(sleevesWanted({ route: route(1, { 1: 3, 4: 3 }) })).toBe(false);
+  });
+
+  test("is launched in BN10 and anywhere once SF10 is owned", () => {
+    expect(sleevesWanted({ route: route(10) })).toBe(true);
+    expect(sleevesWanted({ route: route(2, { 10: 1 }) })).toBe(true);
+  });
+});
+
 describe("decide: only helpers that fit the free RAM", () => {
   test("puts a helper that doesn't fit on home on the rooted server with the most free RAM", () => {
     const freeRamGb = { home: 1.0, "n00dles": 4, "foodnstuff": 16, "sigma-cosmetics": 8 };
