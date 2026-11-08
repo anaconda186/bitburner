@@ -87,6 +87,9 @@ export const CALLS: Readonly<Record<string, HelperScript>> = {
   // #53: opens every port it has the program for and NUKEs, on each server
   // named in its argument ({ hosts }). Replies { rooted: string[] }.
   root: "sr/h/root.js",
+  // #54/#57: buys a cloud server, { host, ram } (ns.cloud.purchaseServer).
+  // Replies the new server's hostname. The run names them sr-00 ... sr-24.
+  buyServer: "sr/h/buy-server.js",
 };
 
 /**
@@ -109,6 +112,8 @@ export interface WorkerSpec {
   readonly control?: number;
   /** Start it on home only with the home reserve still free beside it (`homeReserveGb` in decide.ts). */
   readonly homeHeadroom?: boolean;
+  /** Start it on this server and nowhere else (the driver on its own cloud server). */
+  readonly host?: string;
 }
 
 export const WORKERS = {
@@ -123,6 +128,9 @@ export const WORKERS = {
     files: ["sr/money-engine.js", "sr/formulas.js"],
     homeHeadroom: true,
   },
+  // #54: the BN1.1 driver (UI automation) on its own 32 GB cloud server. Its
+  // jobs come over its control port (DriverOrder in `driver-jobs.ts`).
+  driver: { script: "sr/h/driver.js", port: 4, control: 5, files: ["sr/driver-jobs.js", "sr/ui.js"], host: "sr-00" },
 } as const satisfies Record<string, WorkerSpec>;
 
 export type WorkerName = keyof typeof WORKERS;
