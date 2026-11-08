@@ -168,6 +168,8 @@ describe("stateOnBoot: the state file at boot", () => {
       state: {
         v: 1, category: "open", startedAt: T0, buildSha: SOURCE, updatedAt: T0,
         milestone: null, splits: [], reloads: [], builds: [],
+        // #49's fields: boot leaves them to their defaults.
+        installs: 0, resetAt: null,
       },
     });
   });

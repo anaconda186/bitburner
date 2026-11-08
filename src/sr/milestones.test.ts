@@ -11,7 +11,7 @@ function snap(route: RouteFacts | null, over: Partial<Snapshot> = {}): Snapshot 
     nowMs: T0,
     freeRamGb: { home: 4 },
     helperRamGb: {},
-    probes: route === null ? {} : { route: { ok: true, value: route, atMs: T0 } },
+    probes: route === null ? {} : { route: { ok: true, value: { ...route, lastAugReset: T0, lastNodeReset: T0 }, atMs: T0 } },
     probesInFlight: [],
     callRunning: false,
     ...over,

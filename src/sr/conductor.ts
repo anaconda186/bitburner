@@ -21,7 +21,10 @@ import type { Json, Reply } from "./helper-contract.ts";
 import { HELPER_SCRIPTS, PROBES, type HelperScript, type ProbeName, type ProbeValues } from "./helpers.ts";
 import { MILESTONES, milestonesReached } from "./milestones.ts";
 import { openRunState } from "./run-state.ts";
-import { reachedMilestones, recordMilestone } from "./state.ts";
+import { finishSummary, formatDuration, runFinished, splitLine, splitStats } from "./splits.ts";
+import {
+  accountStart, buildOnHome, MANIFEST_FILE, noteBuild, reachedMilestones, recordMilestone, type ConductorStart,
+} from "./state.ts";
 
 /** Time between iterations when nothing went wrong. */
 const TICK_MS = 1000;
@@ -125,6 +128,11 @@ export async function main(ns: NS): Promise<void> {
   const record = openRunState(ns);
   if (record === null) return;
   ns.tprint("conductor: up");
+  // Every boot with no live conductor lands here. boot.js leaves an existing
+  // state file alone, so the conductor records the build and the start (#49).
+  const start: ConductorStart = { atMs: Date.now(), savedUpdatedAt: record.state.updatedAt };
+  record.update((state) => noteBuild(state, buildOnHome(ns.read(MANIFEST_FILE)), start.atMs));
+  let startAccounted = false;
   const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts() };
   let beats = 0;
   let lastTerminalBeat = Date.now();
@@ -134,10 +142,23 @@ export async function main(ns: NS): Promise<void> {
       collectProbes(ns, m);
       const snapshot = takeSnapshot(ns, m);
       await carryOut(ns, m, decide(snapshot));
-      for (const name of milestonesReached(MILESTONES, snapshot, reachedMilestones(record.state))) {
-        record.update((state) => recordMilestone(state, name, snapshot.nowMs));
-        ns.tprint(`conductor: milestone ${name}`);
+      // This start is a reload, a reset or the run's first: the route probe's
+      // reset times tell which, so it is accounted once its reading lands.
+      const route = snapshot.probes.route;
+      if (!startAccounted && route?.ok) {
+        const before = record.state.reloads.length;
+        record.update((state) => accountStart(state, start, route.value));
+        if (record.state.reloads.length > before) {
+          ns.tprint(`conductor: reload; ${formatDuration(start.atMs - start.savedUpdatedAt)} lost since the last save`);
+        }
+        startAccounted = true;
       }
+      const due = milestonesReached(MILESTONES, snapshot, reachedMilestones(record.state));
+      for (const name of due) {
+        record.update((state) => recordMilestone(state, name, snapshot.nowMs, splitStats(snapshot)));
+        ns.tprint(splitLine(record.state));
+      }
+      if (due.length > 0 && runFinished(record.state)) for (const line of finishSummary(record.state)) ns.tprint(line);
       record.keep(snapshot.nowMs);
       beats++;
       ns.print(`heartbeat ${beats} at ${new Date(snapshot.nowMs).toISOString()}`);
