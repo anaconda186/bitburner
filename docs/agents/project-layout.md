@@ -13,6 +13,8 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 | `npm run build` | Clean `build/`, then compile `src/` into it. |
 | `npm run ram-check` | The static RAM budget gate over `build/` (run `build` first; `-- --build <dir>` for another folder). |
 | `npm run smoke` | The Playwright smoke test over `build/` in the real game (run `build` first). `-- --once` skips the retry, `--headed` shows the window, `--build <dir>` tests another folder. Needs Chromium once: `npx playwright install chromium`. |
+| `npm run live` | The live split reader (#51): our Remote API server on port 12525 (`-- --port`, `--host`). Point the game's Options → Remote API at it and press Connect. It prints the split table whenever `sr/state.json` changes and exports the run at the finish line. `-- --once` prints once, `--export` exports now; both then exit. |
+| `npm run compare -- <a.json> <b.json>` | Compares two exported runs, net times by default (`--gross`, `--both`). Exits 1 on runs of different categories. |
 | `npm run publish-release` | Push `build/` to the orphan `release` branch. CI runs it; for a local try, `-- --remote <path to a bare repo>`. |
 
 ## Folders
@@ -21,9 +23,10 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 |---|---|
 | `src/` | Game scripts in TypeScript. **`src/` mirrors home:** `src/boot.ts` becomes `boot.js` at the root, and every other script goes under `src/sr/`. Nothing else may live in `src/` except tests. |
 | `src/**/*.test.ts` | Unit tests, next to the code they test (seams A–E). Never compiled into `build/`. |
-| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, later `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
+| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, `live`, `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
 | `tools/harness/` | The Playwright harness (#46): the game in Chromium, the local release, our Remote API server and the smoke test's pure verdicts. Reused by the dev loop and scenario tests. |
 | `test/` | Tests and checks that belong to no single file, such as `ns-api-guard.ts`, which proves the typecheck catches Netscript misuse, and `ci-gate.test.ts`, which pins the gate order in the workflow. |
+| `runs/` | gitignored. Exported runs, `<date>-<category>-<build>.json`, and the rollback watcher's logs in `runs/watch/<startedAt>.json`. |
 | `.smoke/` | gitignored. A failed smoke attempt's screenshot and terminal text (CI uploads it as the `smoke-evidence` artifact). |
 | `.game/` | gitignored. `app/` = the v3.0.1 static build (the zip's `resources/app/`), `source/<repo path>` = pinned game source files. The game's code is never committed. |
 | `build/` | gitignored. Exactly the files the release ships. |
@@ -139,6 +142,26 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 - **Never click or type with bare Playwright calls in the game.** A loaded save opens the Offline dialog about 250 ms after the terminal appears, and it blocks clicks and takes the focus. Use `clickThrough` (inside the helpers) and `typeLine`, which close dialogs and retry.
 - **Always press Connect after a load.** The game's own auto-connect fires once, 2 s after page start, before the save (and so the port) has loaded. See `docs/research/headless-game.md` §6 for this and the throttling findings.
 - **Browser:** the pinned `playwright` (exact version in `package.json`) and its Chromium; CI installs it with `npx playwright install --with-deps chromium` and caches `~/.cache/ms-playwright`.
+
+## Live reader, exports and compare (set by #51)
+
+- **Pure rules (seam E), `tools/runs.ts`:**
+  - **The rollback watcher's log** (`WatchLog = { startedAt, windows, seen }`): `watchState(log, state, nowMs)` adds every split read (`Seen = { milestone, ms }`) and the time it was watching. Two reads more than `WATCH_GAP_MS` (60 s) apart start a new window. A state with another `startedAt` starts a new log.
+  - `rolledBack(log, state)` lists the splits the watcher saw that the state no longer has, whether or not the run reached the milestone again later (a re-reach has a different `ms`). `watchedMs(log)` is the time watched. `attached(log)` drops a log that watched for no time (a single read), so a one-off export counts as unwatched.
+  - `rollbackText(r)` is the only wording: `rollbacks unobserved` without a watcher, `rollbacks: none seen, watched X of Y` or `rollbacks: N (names), watched X of Y` with one. Never "none" without a watcher.
+  - **Exports:** `exportName(state)` is `<start as 2026-11-07T153012Z>-<category>-<first 7 of buildSha>.json`. The start time to the second keeps two runs of one build on one day apart and sorts the names. `exportText(state, log, nowMs)` writes `{ export: 1, exportedAt, state, watch }`. `parseRun(text)` reads that, or a state file copied out by hand (an unwatched run), through `parseState`, and drops a log of another run. A newer `export` format is refused.
+  - `liveTable(state, nowMs, log)` gives the reader's table: the run's header (category, start, builds, gross, net, reloads, installs), one line per split (gross, net, net segment, build, installs, stats), the splits seen rolled back in time order, then `rollbackText`.
+- **`compare` (seam E), `tools/compare.ts`:** `compare(a, b)` returns `{ ok: false, error }` for different categories. Otherwise it gives a `Report` with one `Row` per milestone of either run.
+  - Order: A's milestones (rolled-back ones included, by time), with each of B's own milestones placed after the one B reached before it.
+  - A segment runs from the previous milestone both runs reached (or the start). So a skipped milestone doesn't distort the next segment, and a segment delta is always the change in the split delta.
+  - Deltas are B − A (positive means B was slower), as `Times = { grossMs, netMs }`, or null where either side has a gap.
+  - `Side.builds` lists every build that ran in the segment, from `buildSha` and the `builds` records' wall-clock `fromMs`. `buildsDiffer` is set where both runs reached the milestone and those lists differ.
+  - `renderCompare(report, { columns: "net" | "gross" | "both", labels })` gives the text. Net is the default. A gap shows as `gap`, a milestone lost and never re-reached as `rolled back`, and a missing delta as `-`. The notes column says `builds differ` and `rolled back in A/B`.
+- **The live reader, `tools/live.ts`:**
+  - `watchRun(api, { outDir, everyMs, show, log })` works on any `RemoteApi`. It polls `getFile("sr/state.json")`, keeps the watcher's log in `runs/watch/<startedAt>.json` (reloaded on restart, so the log survives a restart of the reader), calls `show` when the file or the log changes, and exports when `runFinished(state)` first holds. `exportNow()` exports the last run read.
+  - **The game connects to one Remote API server at a time.** Anything else that runs a server, such as the dev loop, should attach `watchRun` to its own server rather than run `npm run live` beside it.
+  - `startRemoteApi(host, listenPort = 0)` takes the port as an optional second argument, so a real game's saved Remote API settings keep working across restarts.
+- **Not unit tested:** the CLI shells (`live.ts`, compare's `import.meta.main`). The scratchpad's `verify/t51-live.ts` checked them in the real game.
 
 ## CI (`.github/workflows/ci.yml`)
 
