@@ -14,7 +14,7 @@ const DRIVER = WORKERS.driver.script;
 const reading = <T,>(value: T, atMs = NOW) => ({ ok: true, value, atMs }) as const;
 const route = (currentNode: number, ownedSF: Record<number, number> = {}) =>
   reading({ currentNode, ownedSF, lastAugReset: NOW, lastNodeReset: NOW });
-const stats = (money: number) => reading({ hack: 10, money, M: 1, homeRam: 8 });
+const stats = (money: number) => reading({ hack: 10, money, M: 1, homeRam: 8, city: "Sector-12", casinoWinnings: 0 });
 const COSTS = {
   [PROBES.network.script]: 1.8,
   [PROBES.route.script]: 2.6,

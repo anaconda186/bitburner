@@ -40,8 +40,19 @@ export interface ProbeValues {
    * conductor start after a reset from one after a page reload.
    */
   route: RouteFacts & ResetTimes;
-  /** A split's stats (#49), all but the sleeves. */
-  stats: { readonly hack: number; readonly money: number; readonly M: number; readonly homeRam: number };
+  /**
+   * A split's stats (#49), all but the sleeves; plus (#56) the player's city
+   * and the net casino winnings since the install (getMoneySources), which
+   * tell decide where the casino stands after a reload.
+   */
+  stats: {
+    readonly hack: number;
+    readonly money: number;
+    readonly M: number;
+    readonly homeRam: number;
+    readonly city: string;
+    readonly casinoWinnings: number;
+  };
   /** Sleeves owned (#49). Only launched where sleeves can exist (`sleevesPossible`). */
   sleeves: { readonly count: number };
   /** Whether the TIX API, which every stock call needs, is owned (#72: the BN8 trader waits for it). */

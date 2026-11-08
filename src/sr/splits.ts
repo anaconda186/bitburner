@@ -19,7 +19,9 @@ const NO_STATS = Object.fromEntries(["hack", "money", "M", "homeRam"].map((k) =>
  */
 export function splitStats(snapshot: Snapshot): SplitStats {
   const { stats, route, sleeves } = snapshot.probes;
-  const base = stats?.ok ? stats.value : NO_STATS;
+  // Only the split's own fields: the probe also reads the city and the casino (#56).
+  const v = stats?.ok ? stats.value : undefined;
+  const base = v === undefined ? NO_STATS : { "hack": v["hack"], money: v.money, M: v.M, homeRam: v.homeRam };
   let count: number | null = null;
   if (route?.ok) count = !sleevesPossible(route.value) ? 0 : sleeves?.ok ? sleeves.value.count : null;
   return { ...base, sleeves: count };

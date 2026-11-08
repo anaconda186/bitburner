@@ -245,7 +245,7 @@ describe("decide: the money engine", () => {
       probes: {
         network: reading({ hosts: ["home", "n00dles", "foodnstuff", "sigma-cosmetics"] }),
         route: route(1),
-        stats: reading({ hack: 1, money: 1000, M: 1, homeRam: 8 }),
+        stats: reading({ hack: 1, money: 1000, M: 1, homeRam: 8, city: "Sector-12", casinoWinnings: 0 }),
         market: reading({ hasTixApi: false }),
       },
       ...over,
