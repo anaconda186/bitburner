@@ -114,6 +114,11 @@ export interface WorkerSpec {
   readonly homeHeadroom?: boolean;
   /** Start it on this server and nowhere else (the driver on its own cloud server). */
   readonly host?: string;
+  /**
+   * Launch it non-temporary, so a save records it as running and the game
+   * starts it again after a reload (#23: the casino, and nothing else).
+   */
+  readonly survivesReload?: boolean;
 }
 
 export const WORKERS = {
@@ -131,6 +136,11 @@ export const WORKERS = {
   // #54: the BN1.1 driver (UI automation) on its own 32 GB cloud server. Its
   // jobs come over its control port (DriverOrder in `driver-jobs.ts`).
   driver: { script: "sr/h/driver.js", port: 4, control: 5, files: ["sr/driver-jobs.js", "sr/ui.js"], host: "sr-00" },
+  // #55: the casino (UI automation, Open only), the one non-temporary run
+  // script: it comes back by itself after each of its reloads. Its argument
+  // is { category }; its report is CasinoNews (`blackjack.ts`). Where and
+  // when it runs is decide's (#56).
+  casino: { script: "sr/h/casino.js", port: 6, files: ["sr/blackjack.js", "sr/ui.js"], survivesReload: true },
 } as const satisfies Record<string, WorkerSpec>;
 
 export type WorkerName = keyof typeof WORKERS;

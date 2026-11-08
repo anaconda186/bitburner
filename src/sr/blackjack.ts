@@ -13,6 +13,8 @@
  * it; never from the page (its dialog can sit hidden behind the Offline one).
  */
 export const CASINO_CAP = 10e9;
+/** The cloud server the casino runs on until home has 128 GB (spec #41, $3.52m). */
+export const CASINO_HOST_RAM_GB = 64;
 /** The blackjack table's largest bet (src/Casino/Blackjack.tsx:16). */
 export const MAX_BET = 100e6;
 
