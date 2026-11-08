@@ -1,7 +1,7 @@
 // `compare` over two exported runs (seam E): two run records in, a report out.
 import { describe, expect, test } from "vitest";
-import { compare } from "./compare.ts";
-import type { RunRecord } from "./runs.ts";
+import { compare, renderCompare, type Columns } from "./compare.ts";
+import { watchState, type RunRecord, type WatchLog } from "./runs.ts";
 import type { RunState } from "../src/sr/state.ts";
 
 const T0 = Date.UTC(2026, 10, 7, 12, 0, 0);
@@ -139,5 +139,96 @@ describe("builds", () => {
 
   test("never flags two runs of one build", () => {
     expect(rowsOf(a, a).some((r) => r.buildsDiffer)).toBe(false);
+  });
+
+  test("the report marks the flagged segments", () => {
+    const lines = text(a, b);
+    expect(lineOf(lines, "x")).not.toMatch(/builds differ/);
+    expect(lineOf(lines, "y")).toMatch(/builds differ/);
+  });
+});
+
+/** The rendered report, failing the test if compare refused. */
+function text(a: RunRecord, b: RunRecord, columns?: Columns): string[] {
+  const r = compare(a, b);
+  if (!r.ok) throw new Error(r.error);
+  return renderCompare(r.report, columns === undefined ? {} : { columns });
+}
+
+/** The table line of one milestone. */
+const lineOf = (lines: string[], milestone: string) => lines.find((l) => l.split(/\s+/)[0] === milestone) ?? "";
+
+describe("the report", () => {
+  const a = run({ splits: [{ name: "bn1.1", min: 60, lostMin: 10 }, { name: "bn2.1", min: 120, lostMin: 10 }] });
+  const b = run({ splits: [{ name: "bn1.1", min: 50 }, { name: "bn2.1", min: 130, lostMin: 30 }] });
+
+  test("shows net times by default", () => {
+    const lines = text(a, b);
+    expect(lines.join("\n")).toMatch(/net/);
+    // Net: A 1:50:00, B 1:40:00, the segments 1:00:00 and 0:50:00.
+    const row = lineOf(lines, "bn2.1").split(/\s+/);
+    expect(row.slice(1, 7)).toEqual(["1:50:00", "1:40:00", "-0:10:00", "1:00:00", "0:50:00", "-0:10:00"]);
+  });
+
+  test("shows gross times when asked", () => {
+    const row = lineOf(text(a, b, "gross"), "bn2.1").split(/\s+/);
+    expect(row.slice(1, 7)).toEqual(["2:00:00", "2:10:00", "+0:10:00", "1:00:00", "1:20:00", "+0:20:00"]);
+  });
+
+  test("shows both, net first, when asked", () => {
+    const row = lineOf(text(a, b, "both"), "bn2.1").split(/\s+/);
+    expect(row.slice(1, 13)).toEqual([
+      "1:50:00", "1:40:00", "-0:10:00", "1:00:00", "0:50:00", "-0:10:00",
+      "2:00:00", "2:10:00", "+0:10:00", "1:00:00", "1:20:00", "+0:20:00",
+    ]);
+  });
+
+  test("shows a skipped milestone as a gap, never as a zero", () => {
+    const skip = run({ splits: [{ name: "bn2.1", min: 100 }] });
+    const row = lineOf(text(a, skip), "bn1.1");
+    expect(row.split(/\s+/).slice(1, 3)).toEqual(["0:50:00", "gap"]);
+    expect(row).not.toMatch(/0:00:00/);
+  });
+});
+
+describe("rollbacks in the report", () => {
+  const splits = [{ name: "bn1.1", min: 60 }, { name: "bn2.1", min: 120 }];
+
+  test("say unobserved for a run no watcher was attached to, never none", () => {
+    const lines = text(run({ splits }), run({ splits }));
+    expect(lines.filter((l) => /rollbacks unobserved/.test(l))).toHaveLength(2);
+    expect(lines.join("\n")).not.toMatch(/none/);
+  });
+
+  /** A watched run that reached `bn2.1:x` at minute 90, lost it to a reload and, if `again`, reached it again at 100. */
+  function rolled(again: boolean): RunRecord {
+    const base = run({ splits: [{ name: "bn1.1", min: 60 }, { name: "bn2.1:x", min: 90 }, { name: "bn2.1", min: 120 }] });
+    const before = { ...base.state, splits: base.state.splits.slice(0, 2) };
+    const final = again
+      ? { ...base.state, splits: [base.state.splits[0], { ...(base.state.splits[1] as object), ms: 100 * MIN }, base.state.splits[2]] }
+      : { ...base.state, splits: [base.state.splits[0], base.state.splits[2]] };
+    let watch: WatchLog | null = null;
+    for (let m = 0; m <= 120; m++) watch = watchState(watch, m < 95 ? before : final, T0 + m * MIN);
+    return { state: final, watch };
+  }
+
+  test("mark a milestone the watcher saw rolled back", () => {
+    const lines = text(rolled(false), run({ splits }));
+    expect(lineOf(lines, "bn2.1:x").split(/\s+/).slice(1, 3)).toEqual(["rolled", "back"]);
+    expect(lines.find((l) => l.startsWith("A rollbacks"))).toMatch(/1 \(bn2\.1:x\), watched 2:00:00 of 2:00:00/);
+    expect(lines.find((l) => l.startsWith("B rollbacks"))).toMatch(/unobserved/);
+  });
+
+  test("mark a milestone that was rolled back and reached again", () => {
+    const lines = text(rolled(true), run({ splits }));
+    expect(lineOf(lines, "bn2.1:x")).toMatch(/^bn2\.1:x\s+1:40:00\s+gap.*rolled back in A/);
+  });
+
+  test("say none seen, with how long it watched, when the watcher saw none", () => {
+    let watch: WatchLog | null = null;
+    const r = run({ splits });
+    for (let m = 60; m <= 120; m++) watch = watchState(watch, r.state, T0 + m * MIN);
+    const lines = text({ ...r, watch }, run({ splits }));
+    expect(lines.find((l) => l.startsWith("A rollbacks"))).toMatch(/none seen, watched 1:00:00 of 2:00:00/);
   });
 });
