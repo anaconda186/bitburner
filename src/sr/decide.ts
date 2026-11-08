@@ -12,8 +12,10 @@ import {
   CALLS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeSpec, type ProbeValues, type WorkerName, type WorkerSpec,
 } from "./helpers.ts";
 import { nextDriverJob, readDriverNews, readDriverOrder, type City, type DriverOrder } from "./driver-jobs.ts";
-import { cloudServerCost, NEUTRAL_MULTS } from "./formulas.ts";
+import { fleetWant } from "./fleet.ts";
+import { cloudServerCost, NEUTRAL_MULTS, type NodeMults } from "./formulas.ts";
 import { ORDERS_OFF, readOrders, SPLIT_MONEY, type EngineOrders } from "./money-engine.ts";
+import { nodeMults } from "./node-mults.ts";
 
 /** The latest reply of one probe and when the conductor read it. */
 export type ProbeReading<T> = Reply<T> & { readonly atMs: number };
@@ -88,6 +90,8 @@ export function decide(snapshot: Snapshot): readonly Action[] {
   wants.push(...staleProbes(snapshot).map((name): Want => ({ kind: "probe", name })));
   const rooting = rootWant(snapshot);
   if (rooting !== undefined) wants.push(rooting);
+  const purchase = fleetWant(snapshot, engineOrders(snapshot), driverWanted(snapshot) ? [DRIVER_HOST] : []);
+  if (purchase !== undefined) wants.push(purchase);
   wants.push(...engineWants(snapshot));
   if (traderWanted(snapshot) && startDue(snapshot.workers.trader, snapshot.nowMs)) {
     wants.push({ kind: "start", worker: "trader", arg: null });
@@ -198,12 +202,17 @@ export function homeReserveGb(s: Snapshot): number {
 export function engineOrders(s: Snapshot): EngineOrders {
   const route = s.probes.route;
   if (route?.ok !== true || route.value.currentNode === 8) return ORDERS_OFF;
-  const orders = { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s) };
+  const reading = s.probes.bitnode;
+  const mults = nodeMults(route.value, reading?.ok ? reading.value : undefined);
+  const orders = { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s), mults };
   // The driver's room on its host stays free for it (a static reserve, so a
   // driver that died finds its room still there when it is started again).
   const driverGb = s.helperRamGb[WORKERS.driver.script] ?? 0;
   return driverWanted(s) && driverGb > 0 ? { ...orders, hostReserveGb: { [DRIVER_HOST]: driverGb } } : orders;
 }
+
+const sameMults = (a: NodeMults, b: NodeMults): boolean =>
+  (Object.keys(a) as (keyof NodeMults)[]).every((k) => a[k] === b[k]);
 
 const sameReserves = (a: EngineOrders["hostReserveGb"] = {}, b: EngineOrders["hostReserveGb"] = {}): boolean =>
   Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([h, gb]) => b[h] === gb);
@@ -213,7 +222,8 @@ const sameOrders = (a: EngineOrders, b: EngineOrders): boolean =>
   sameReserves(a.hostReserveGb, b.hostReserveGb) &&
   a.split.money === b.split.money &&
   a.split.exp === b.split.exp &&
-  a.split.sharing === b.split.sharing;
+  a.split.sharing === b.split.sharing &&
+  sameMults(a.mults, b.mults);
 
 /**
  * The money engine: its orders go on its control port whenever the port reads
@@ -321,6 +331,9 @@ function staleProbes(s: Snapshot): ProbeName[] {
     const spec = PROBES[name];
     if (spec.onlyIf !== undefined && !spec.onlyIf(s.probes)) return false;
     const reading = s.probes[name];
-    return reading === undefined || s.nowMs - reading.atMs >= spec.maxAgeMs;
+    if (reading === undefined || s.nowMs - reading.atMs >= spec.maxAgeMs) return true;
+    // Read again at once after an action helper that changes what it reads.
+    const last = s.lastCall;
+    return last !== undefined && spec.afterCalls?.includes(last.script) === true && last.atMs >= reading.atMs;
   });
 }

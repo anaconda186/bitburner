@@ -17,7 +17,7 @@
 // formulas.test.ts prices every export.
 
 /** The BitNode multipliers these formulas read (src/BitNode/BitNodeMultipliers.ts). */
-export interface NodeMults {
+export type NodeMults = {
   HackExpGain: number;
   HackingLevelMultiplier: number;
   HackingSpeedMultiplier: number;
@@ -27,7 +27,7 @@ export interface NodeMults {
   CloudServerCost: number;
   CloudServerSoftcap: number;
   CloudServerMaxRam: number;
-}
+};
 
 /** Every multiplier at 1, as in BN1. */
 export const NEUTRAL_MULTS: Readonly<NodeMults> = {
@@ -127,6 +127,16 @@ const FORTIFY_PER_THREAD = 0.002;
 export function hackSecurityRise(threads: number, fraction: number): number {
   const counted = fraction > 0 ? Math.min(threads, Math.ceil(1 / fraction)) : threads;
   return FORTIFY_PER_THREAD * counted;
+}
+
+/**
+ * Security a grow of `threads` adds when every thread is used: twice a
+ * hack's 0.002 per thread (ns.growthAnalyzeSecurity without a host). The game
+ * counts only the threads the growth actually needed, so this is the most it
+ * can add. src/Server/ServerHelpers.ts:202-211, src/NetscriptFunctions.ts:325-342.
+ */
+export function growSecurityRise(threads: number): number {
+  return 2 * FORTIFY_PER_THREAD * threads;
 }
 
 /**
