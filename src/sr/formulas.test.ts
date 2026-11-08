@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  expForSkill,
   growFactor,
   growThreadsFor,
   grownMoney,
@@ -17,6 +18,8 @@ import {
   hackExp,
   hackFraction,
   hackTimeMs,
+  skillFromExp,
+  weakenAmount,
   weakenTimeMs,
   type Hacker, type NodeMults, type Target } from "./formulas.ts";
 
@@ -90,5 +93,15 @@ describe.each(fixture.contexts)("golden values: $name", (ctx) => {
   it("grow threads, exactly", () => {
     const ours = (c: HackingCase) => growThreadsFor(c.server, c.person, c.targetMoney, c.cores, ctx.nodeMults);
     expect(misses(h, ours, (c) => c.out.growThreads!, true)).toEqual([]);
+  });
+  it("security removed by a weaken", () => {
+    const ours = (c: Context["weaken"][number]) => weakenAmount(c.threads, c.cores, ctx.nodeMults);
+    expect(misses(ctx.weaken, ours, (c) => c.out)).toEqual([]);
+  });
+  it("skill from exp, exactly", () => {
+    expect(misses(ctx.skills, (c) => skillFromExp(c.exp, c.mult), (c) => c.out, true)).toEqual([]);
+  });
+  it("exp for a skill", () => {
+    expect(misses(ctx.exps, (c) => expForSkill(c.skill, c.mult), (c) => c.out)).toEqual([]);
   });
 });

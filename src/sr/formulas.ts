@@ -206,3 +206,47 @@ export function growThreadsFor(t: Target, p: Hacker, targetMoney: number, cores:
   for (let i = 0; i < 4 && !reaches(n); i++) n++;
   return n;
 }
+
+/**
+ * Security one weaken of `threads` removes: 0.05 per thread × the core bonus ×
+ * ServerWeakenRate (ns.formulas.hacking.weakenEffect). src/Server/ServerHelpers.ts:292-295,
+ * 0.05 from src/Server/data/Constants.ts:10. The game stops at minDifficulty.
+ */
+export function weakenAmount(threads: number, cores: number, bn: NodeMults): number {
+  return 0.05 * threads * coreBonus(cores) * bn.ServerWeakenRate;
+}
+
+/**
+ * A stat level from its exp: floor(mult·(32·ln(exp + 534.6) − 200)), at least 1
+ * (ns.formulas.skills.calculateSkill). src/PersonObjects/formulas/skill.ts:7-15.
+ * A mult of 0 (BN12 at a high level) keeps the level at 1.
+ * For hacking, mult is the player's hacking mult × HackingLevelMultiplier: see hackingLevel.
+ */
+export function skillFromExp(exp: number, mult: number): number {
+  if (mult === 0) return 1;
+  return clamp(Math.floor(mult * (32 * Math.log(exp + 534.6) - 200)), 1);
+}
+
+/**
+ * The exp at which a stat reaches `skill`, the inverse of skillFromExp, never
+ * below 0 (ns.formulas.skills.calculateExp). src/PersonObjects/formulas/skill.ts:17-34.
+ * For a whole skill the result is nudged up until skillFromExp really gives
+ * that skill, as the game does against rounding.
+ */
+export function expForSkill(skill: number, mult: number): number {
+  const exact = Math.exp((skill / mult + 200) / 32) - 534.6;
+  let exp = exact;
+  if (Number.isInteger(skill) && Number.isFinite(exact)) {
+    let step = Math.abs(exact) * Number.EPSILON || Number.MIN_VALUE;
+    for (let i = 0; i < 2000 && skillFromExp(exp, mult) < skill; i++, step *= 2) exp = exact + step;
+  }
+  return clamp(exp, 0);
+}
+
+/**
+ * The hacking level `exp` gives: skillFromExp with the player's hacking mult
+ * times the BitNode's HackingLevelMultiplier. src/PersonObjects/Person.ts:62-65.
+ */
+export function hackingLevel(exp: number, hackingMult: number, bn: NodeMults): number {
+  return skillFromExp(exp, hackingMult * bn.HackingLevelMultiplier);
+}
