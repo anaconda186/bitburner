@@ -84,3 +84,60 @@ describe("split and segment deltas", () => {
     expect(second?.b.segment).toEqual({ grossMs: 80 * MIN, netMs: 50 * MIN });
   });
 });
+
+describe("a milestone one run skipped", () => {
+  const a = run({ splits: [{ name: "x", min: 10 }, { name: "y", min: 20 }, { name: "z", min: 30 }] });
+  const b = run({ splits: [{ name: "x", min: 12 }, { name: "v", min: 18 }, { name: "z", min: 25 }, { name: "w", min: 40 }] });
+  const byName = () => new Map(rowsOf(a, b).map((r) => [r.milestone, r]));
+
+  test("is a row with a gap on that side and no delta, not a zero", () => {
+    const y = byName().get("y");
+    expect(y?.a.split).toEqual({ grossMs: 20 * MIN, netMs: 20 * MIN });
+    expect(y?.b).toMatchObject({ split: null, segment: null });
+    expect(y?.split).toBeNull();
+    expect(y?.segment).toBeNull();
+    expect(byName().get("v")?.a).toMatchObject({ split: null, segment: null });
+    expect(byName().get("w")?.a).toMatchObject({ split: null, segment: null });
+  });
+
+  test("keeps each run's order, with milestones only one run has in place", () => {
+    const names = rowsOf(a, b).map((r) => r.milestone);
+    expect(names[0]).toBe("x");
+    expect(names.slice(1, 3).sort()).toEqual(["v", "y"]);
+    expect(names.slice(3)).toEqual(["z", "w"]);
+  });
+
+  test("leaves the next segment running from the last milestone both reached", () => {
+    const z = byName().get("z");
+    expect(z?.a.segment?.netMs).toBe(20 * MIN);
+    expect(z?.b.segment?.netMs).toBe(13 * MIN);
+    expect(z?.segment?.netMs).toBe(-7 * MIN);
+  });
+});
+
+describe("builds", () => {
+  const three = [{ name: "x", min: 20 }, { name: "y", min: 40 }, { name: "z", min: 60 }];
+  const a = run({ splits: three });
+  // B switched from A's build to its own at minute 30, inside the segment to y.
+  const b = run({ splits: three, builds: [{ sha: SHA_B, atMin: 30 }] });
+
+  test("flags the segments where the two runs ran different builds", () => {
+    expect(rowsOf(a, b).map((r) => [r.milestone, r.buildsDiffer])).toEqual([
+      ["x", false],
+      ["y", true],
+      ["z", true],
+    ]);
+  });
+
+  test("names every build that ran in a segment", () => {
+    const [x, y, z] = rowsOf(a, b);
+    expect(x?.b.builds).toEqual([SHA_A]);
+    expect(y?.b.builds).toEqual([SHA_A, SHA_B]);
+    expect(z?.b.builds).toEqual([SHA_B]);
+    expect(z?.a.builds).toEqual([SHA_A]);
+  });
+
+  test("never flags two runs of one build", () => {
+    expect(rowsOf(a, a).some((r) => r.buildsDiffer)).toBe(false);
+  });
+});
