@@ -106,3 +106,55 @@ describe("decide: wait while the casino runs", () => {
     expect(decide(s)).toEqual([{ kind: "control", worker: "engine", message: ORDERS_OFF }]);
   });
 });
+
+describe("decide: starting the casino", () => {
+  test("starts it on sr-01 with the run's category, before anything else is placed", () => {
+    expect(decide(run())[0]).toEqual(startCasino);
+    expect(starts(run())).toEqual([startCasino]);
+  });
+
+  test("plays only in Open: not in Strict, nor when the category is unknown", () => {
+    expect(starts(run({ category: "strict" }))).toEqual([]);
+    const { category: _unknown, ...noCategory } = run();
+    expect(starts(noCategory)).toEqual([]);
+  });
+
+  test("waits for the player to be in Aevum", () => {
+    expect(starts(run({ city: "Sector-12" }))).toEqual([]);
+  });
+
+  test("waits while the driver has a job in hand, so the two never drive the page at once", () => {
+    expect(starts(run({ controls: { driver: { seq: 5, job: { kind: "options" } } } }))).toEqual([]);
+  });
+
+  test("not once the cap is reached since the install: the casino's own report, or the stats probe after a reload", () => {
+    expect(starts(withCasino(casinoAt("capped", false)))).toEqual([]);
+    expect(starts(run({ winnings: CASINO_CAP + 1 }))).toEqual([]);
+    expect(starts(run({ winnings: CASINO_CAP }))).toEqual([startCasino]);
+  });
+
+  test("not before the stats probe has said how much the casino has paid since the install", () => {
+    const { stats: _unread, ...probes } = run().probes;
+    expect(starts(run({ probes }))).toEqual([]);
+  });
+
+  test("relaunches a casino missing after a reload (no report), and a crashed one after the backoff", () => {
+    expect(starts(run())).toEqual([startCasino]);
+    const crashed = (atMs: number) => casinoAt("failed", false, { failures: 1, lastFailAtMs: atMs });
+    expect(starts(withCasino(crashed(NOW - 999)))).toEqual([]);
+    expect(starts(withCasino(crashed(NOW - 1_000)))).toEqual([startCasino]);
+  });
+
+  test("not in BN8 or BN9, whose plans decide the casino (#73, #71)", () => {
+    expect(starts(run({ probes: { ...run().probes, route: route(8, { 1: 1, 4: 3 }) } }))).toEqual([]);
+    expect(starts(run({ probes: { ...run().probes, route: route(9, { 1: 1, 4: 3 }) } }))).toEqual([]);
+  });
+
+  test("outside BN1.1, where no driver travels, it is played once the player is in Aevum", () => {
+    const bn4 = (city: string) =>
+      run({ city, probes: { ...run({ city }).probes, route: route(4, { 1: 1 }) }, workers: { engine: engineAt(1e6) }, controls: {} });
+    const casinoStarts = (s: Snapshot) => starts(s).filter((a) => a.kind === "start" && a.worker === "casino");
+    expect(casinoStarts(bn4("Aevum"))).toEqual([startCasino]);
+    expect(casinoStarts(bn4("Sector-12"))).toEqual([]);
+  });
+});
