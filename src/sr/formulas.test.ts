@@ -23,6 +23,7 @@ import {
   hackExp,
   hackFraction,
   hackingLevel,
+  hackSecurityRise,
   hackTimeMs,
   NEUTRAL_MULTS,
   skillFromExp,
@@ -47,6 +48,7 @@ interface Context {
   nodeMults: NodeMults;
   cloudMaxRam: number;
   hacking: HackingCase[];
+  security: { host: string; threads: number; fraction: number; out: Num }[];
   weaken: { threads: number; cores: number; out: Num }[];
   skills: { exp: number; mult: number; out: Num }[];
   exps: { skill: number; mult: number; out: Num }[];
@@ -101,6 +103,10 @@ describe.each(fixture.contexts)("golden values: $name", (ctx) => {
   it("grow threads", () => {
     const ours = (c: HackingCase) => growThreadsFor(c.server, c.person, c.targetMoney, c.cores, ctx.nodeMults);
     expect(misses(h, ours, (c) => c.out.growThreads!)).toEqual([]);
+  });
+  it("security a hack adds", () => {
+    expect(ctx.security.length).toBeGreaterThan(100);
+    expect(misses(ctx.security, (c) => hackSecurityRise(c.threads, c.fraction), (c) => c.out)).toEqual([]);
   });
   it("security removed by a weaken", () => {
     const ours = (c: Context["weaken"][number]) => weakenAmount(c.threads, c.cores, ctx.nodeMults);
@@ -209,6 +215,27 @@ describe("BitNode multipliers other than 1 (hand-worked)", () => {
     expect(cloudServerMaxRam(m)).toBe(262_144);
     expect(cloudServerCost(2 ** 18, m)).toBeLessThan(Infinity);
     expect(cloudServerCost(2 ** 19, m)).toBe(Infinity);
+  });
+});
+
+// Security a hack adds (no golden value covers the cap's absence: a fraction
+// of 0 leaves every thread counted). Worked from the game's rule: 0.002 per
+// thread, counting no more threads than it takes to steal everything.
+describe("security a hack adds (hand-worked)", () => {
+  it("is 0.002 per thread", () => {
+    expect(hackSecurityRise(1, 0.01)).toBeCloseTo(0.002, 15);
+    expect(hackSecurityRise(50, 0.01)).toBeCloseTo(0.1, 15);
+  });
+
+  it("counts no more threads than it takes to steal everything: ceil(1/fraction)", () => {
+    // 1/0.003 = 333.3, so 334 threads at most: 0.668.
+    expect(hackSecurityRise(1000, 0.003)).toBeCloseTo(0.668, 12);
+    expect(hackSecurityRise(334, 0.003)).toBeCloseTo(0.668, 12);
+    expect(hackSecurityRise(333, 0.003)).toBeCloseTo(0.666, 12);
+  });
+
+  it("counts every thread when the fraction is 0 (the game's cap is then Infinity)", () => {
+    expect(hackSecurityRise(500, 0)).toBeCloseTo(1, 12);
   });
 });
 

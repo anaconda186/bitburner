@@ -8,7 +8,10 @@
 // probe `name`). `npm run ram-check` prices the real thing.
 import { backoffMs } from "./backoff.ts";
 import type { Json, Reply, WorkerReport } from "./helper-contract.ts";
-import { PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName } from "./helpers.ts";
+import {
+  CALLS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeSpec, type ProbeValues, type WorkerName, type WorkerSpec,
+} from "./helpers.ts";
+import { ORDERS_OFF, readOrders, SPLIT_MONEY, type EngineOrders } from "./money-engine.ts";
 
 /** The latest reply of one probe and when the conductor read it. */
 export type ProbeReading<T> = Reply<T> & { readonly atMs: number };
@@ -41,6 +44,8 @@ export type Snapshot = {
    * since this conductor started (after a reload, nothing has).
    */
   readonly workers: { readonly [W in WorkerName]?: WorkerView };
+  /** What is on each worker's control port now; absent when it is empty. */
+  readonly controls: { readonly [W in WorkerName]?: Json };
 };
 
 /** A long-lived worker as the conductor sees it. */
@@ -62,18 +67,89 @@ export type HelperCall = { readonly kind: "call"; readonly script: HelperScript;
 /** Launch a long-lived worker on `host` and leave it running. */
 export type WorkerStart = { readonly kind: "start"; readonly worker: WorkerName; readonly arg: Json; readonly host: string };
 
+/** Replace what is on a worker's control port (WorkerSpec.control) with `message`. Needs no RAM. */
+export type WorkerControl = { readonly kind: "control"; readonly worker: WorkerName; readonly message: Json };
+
 /** Something for the conductor to do. */
-export type Action = ProbeLaunch | HelperCall | WorkerStart;
+export type Action = ProbeLaunch | HelperCall | WorkerStart | WorkerControl;
 
 /** An action before it has a server: what the sub-deciders produce. */
-export type Want = Omit<ProbeLaunch, "host"> | Omit<HelperCall, "host"> | Omit<WorkerStart, "host">;
+export type Want = Omit<ProbeLaunch, "host"> | Omit<HelperCall, "host"> | Omit<WorkerStart, "host"> | WorkerControl;
 
 export function decide(snapshot: Snapshot): readonly Action[] {
   const wants: Want[] = staleProbes(snapshot).map((name) => ({ kind: "probe", name }));
+  const rooting = rootWant(snapshot);
+  if (rooting !== undefined) wants.push(rooting);
+  wants.push(...engineWants(snapshot));
   if (traderWanted(snapshot) && startDue(snapshot.workers.trader, snapshot.nowMs)) {
     wants.push({ kind: "start", worker: "trader", arg: null });
   }
   return place(snapshot, wants);
+}
+
+const ROOT_SCRIPT = CALLS.root as HelperScript;
+/** How often to try rooting the servers that aren't rooted yet (programs and levels come in over time). */
+export const ROOT_EVERY_MS = 10_000;
+
+/**
+ * Root what can be rooted: every server the network probe found that isn't
+ * rooted now (freeRamGb's keys are the rooted ones) goes to the root helper,
+ * which opens what ports it can and NUKEs. Tried again every ROOT_EVERY_MS.
+ */
+function rootWant(s: Snapshot): Want | undefined {
+  const network = s.probes.network;
+  if (network?.ok !== true) return undefined;
+  const hosts = network.value.hosts.filter((h) => !(h in s.freeRamGb)).sort();
+  if (hosts.length === 0) return undefined;
+  const last = s.lastCall;
+  if (last?.script === ROOT_SCRIPT && s.nowMs - last.atMs < ROOT_EVERY_MS) return undefined;
+  return { kind: "call", script: ROOT_SCRIPT, arg: { hosts } };
+}
+
+/**
+ * RAM on home that the money engine leaves free, so probes and action helpers
+ * still fit there: the dearest one that may run now.
+ */
+export function homeReserveGb(s: Snapshot): number {
+  const scripts: HelperScript[] = Object.values(CALLS);
+  for (const spec of Object.values(PROBES) as ProbeSpec[]) {
+    if (spec.onlyIf === undefined || spec.onlyIf(s.probes)) scripts.push(spec.script);
+  }
+  return Math.max(0, ...scripts.map((script) => s.helperRamGb[script] ?? 0));
+}
+
+/**
+ * The engine's orders (spec #41 "RAM split kinds"): all money, except in BN8,
+ * where hacking earns no money (its exp farm is a later ticket), so off. Off
+ * as well until the route probe has said where the run is.
+ */
+export function engineOrders(s: Snapshot): EngineOrders {
+  const route = s.probes.route;
+  if (route?.ok !== true || route.value.currentNode === 8) return ORDERS_OFF;
+  return { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s) };
+}
+
+const sameOrders = (a: EngineOrders, b: EngineOrders): boolean =>
+  a.homeReserveGb === b.homeReserveGb &&
+  a.split.money === b.split.money &&
+  a.split.exp === b.split.exp &&
+  a.split.sharing === b.split.sharing;
+
+/**
+ * The money engine: its orders go on its control port whenever the port reads
+ * differently (an empty port reads as off), and it is started whenever its
+ * split isn't off. Off doesn't stop a running engine; it just launches nothing.
+ */
+function engineWants(s: Snapshot): Want[] {
+  const orders = engineOrders(s);
+  const wants: Want[] = [];
+  if (!sameOrders(readOrders(s.controls.engine), orders)) {
+    wants.push({ kind: "control", worker: "engine", message: orders });
+  }
+  if (!sameOrders(orders, ORDERS_OFF) && startDue(s.workers.engine, s.nowMs)) {
+    wants.push({ kind: "start", worker: "engine", arg: { control: WORKERS.engine.control } });
+  }
+  return wants;
 }
 
 /**
@@ -94,7 +170,7 @@ function startDue(w: WorkerView | undefined, nowMs: number): boolean {
   return nowMs - w.lastFailAtMs >= backoffMs(w.failures);
 }
 
-function scriptOf(want: Want): HelperScript {
+function scriptOf(want: Exclude<Want, WorkerControl>): HelperScript {
   switch (want.kind) {
     case "probe":
       return PROBES[want.name].script;
@@ -114,18 +190,25 @@ const RAM_EPSILON = 1e-9;
  * a later loop). Home comes first; otherwise the server with the most free
  * RAM (ties by name). RAM placed earlier in the same decision counts as used.
  * At most one action helper is placed, and none while one is still running.
- * Helpers whose cost is 0 or unknown are never placed.
+ * Helpers whose cost is 0 or unknown are never placed. A worker with
+ * `homeHeadroom` goes on home only if the home reserve stays free beside it.
+ * Actions that need no RAM (a control write) pass through in order.
  */
 export function place(snapshot: Snapshot, wants: readonly Want[]): Action[] {
   const free: Record<string, number> = { ...snapshot.freeRamGb };
   const placed: Action[] = [];
   let callPlaced = snapshot.callRunning;
   for (const want of wants) {
+    if (want.kind === "control") {
+      placed.push(want);
+      continue;
+    }
     if (want.kind === "call" && callPlaced) continue;
     const script = scriptOf(want);
     const cost = snapshot.helperRamGb[script] ?? 0;
     if (!(cost > 0)) continue;
-    const host = pickHost(free, cost);
+    const spec: WorkerSpec | undefined = want.kind === "start" ? WORKERS[want.worker] : undefined;
+    const host = pickHost(free, cost, spec?.homeHeadroom === true ? homeReserveGb(snapshot) : 0);
     if (host === undefined) continue;
     free[host] = (free[host] ?? 0) - cost;
     placed.push({ ...want, host });
@@ -134,8 +217,8 @@ export function place(snapshot: Snapshot, wants: readonly Want[]): Action[] {
   return placed;
 }
 
-function pickHost(free: Readonly<Record<string, number>>, cost: number): string | undefined {
-  const fits = (h: string) => (free[h] ?? 0) + RAM_EPSILON >= cost;
+function pickHost(free: Readonly<Record<string, number>>, cost: number, homeHeadroomGb: number): string | undefined {
+  const fits = (h: string) => (free[h] ?? 0) + RAM_EPSILON >= cost + (h === "home" ? homeHeadroomGb : 0);
   if (fits("home")) return "home";
   let best: string | undefined;
   for (const h of Object.keys(free).sort()) {

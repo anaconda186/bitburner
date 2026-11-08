@@ -18,7 +18,7 @@ import { backoffMs } from "./backoff.ts";
 import { decide, type Action, type ProbeReading, type Snapshot, type WorkerView } from "./decide.ts";
 import { awaitReply, isScriptDeath, launchHelper, pollReply, replyPorts, type Launched } from "./helper-calls.ts";
 import { readWorkerReport, type Json, type Reply } from "./helper-contract.ts";
-import { HELPER_SCRIPTS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName } from "./helpers.ts";
+import { HELPER_SCRIPTS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName, type WorkerSpec } from "./helpers.ts";
 import { MILESTONES, milestonesReached } from "./milestones.ts";
 import { openRunState } from "./run-state.ts";
 import { finishSummary, formatDuration, runFinished, splitLine, splitStats } from "./splits.ts";
@@ -71,6 +71,18 @@ function readWorkers(ns: NS, m: Memory, nowMs: number): Snapshot["workers"] {
   return views;
 }
 
+/** What is on each worker's control port (peek: the worker reads it the same way). */
+function readControls(ns: NS): Snapshot["controls"] {
+  const controls: { [W in WorkerName]?: Json } = {};
+  for (const name of Object.keys(WORKERS) as WorkerName[]) {
+    const spec: WorkerSpec = WORKERS[name];
+    if (spec.control === undefined) continue;
+    const handle = ns.getPortHandle(spec.control);
+    if (!handle.empty()) controls[name] = handle.peek() as Json;
+  }
+  return controls;
+}
+
 /** Moves every landed probe reply into the readings. */
 function collectProbes(ns: NS, m: Memory): void {
   for (const [name, launched] of m.inFlight) {
@@ -114,6 +126,7 @@ function takeSnapshot(ns: NS, m: Memory): Snapshot {
     callRunning: m.lingeringCall !== undefined,
     ...(m.lastCall ? { lastCall: m.lastCall } : {}),
     workers: readWorkers(ns, m, nowMs),
+    controls: readControls(ns),
   };
 }
 
@@ -140,6 +153,14 @@ async function carryOut(ns: NS, m: Memory, actions: readonly Action[]): Promise<
         m.workers[action.worker] = afterLaunch(m.workers[action.worker] ?? NO_WORKER, pid, Date.now());
         if ("pid" in launched) ns.tprint(`conductor: started ${action.worker} on ${action.host}`);
         else ns.tprint(`WARN conductor: ${action.worker} not started: ${launched.error}`);
+        break;
+      }
+      case "control": {
+        const port = (WORKERS[action.worker] as WorkerSpec).control;
+        if (port === undefined) throw new Error(`conductor: ${action.worker} has no control port`);
+        ns.clearPort(port);
+        ns.writePort(port, action.message);
+        ns.print(`control ${action.worker}: ${JSON.stringify(action.message)}`);
         break;
       }
       default: {

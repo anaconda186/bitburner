@@ -106,6 +106,18 @@ export async function main(ns: NS): Promise<void> {
     }
   }
 
+  // Security a hack adds (hackSecurityRise): the game's own server and player,
+  // since ns.hackAnalyzeSecurity reads only the real ones. The model's input
+  // is the fraction one thread steals there, recorded alongside.
+  const security: unknown[] = [];
+  for (const host of hosts) {
+    const real = ns.getServer(host) as Server;
+    if (real.moneyMax === undefined) continue; // not a normal server
+    for (const threads of [0, 1, 7, 100, 1000, 12345, Math.ceil(between(1, 5000))]) {
+      security.push({ host, threads, fraction: f.hacking.hackPercent(real, player), out: ns.hackAnalyzeSecurity(threads, host) });
+    }
+  }
+
   const weaken: unknown[] = [];
   for (const threads of [0, 1, 2, 7, 100, 12345]) {
     for (const cores of [1, 2, 3, 8, 64]) weaken.push({ threads, cores, out: f.hacking.weakenEffect(threads, cores) });
@@ -139,6 +151,7 @@ export async function main(ns: NS): Promise<void> {
     nodeMults,
     cloudMaxRam: ns.cloud.getRamLimit(),
     hacking,
+    security,
     weaken,
     skills,
     exps,

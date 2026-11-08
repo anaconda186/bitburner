@@ -82,8 +82,12 @@ export const PROBES: { readonly [P in ProbeName]: ProbeSpec } = {
   market: { script: "sr/h/market.js", maxAgeMs: 30_000 },
 };
 
-/** Action helpers, by name. Launched one at a time and awaited. None yet. */
-export const CALLS: Readonly<Record<string, HelperScript>> = {};
+/** Action helpers, by name. Launched one at a time and awaited. */
+export const CALLS: Readonly<Record<string, HelperScript>> = {
+  // #53: opens every port it has the program for and NUKEs, on each server
+  // named in its argument ({ hosts }). Replies { rooted: string[] }.
+  root: "sr/h/root.js",
+};
 
 /**
  * A long-lived worker (spec #41: the money engine, the BN8 trader, ...): a
@@ -97,10 +101,28 @@ export interface WorkerSpec {
   readonly port: number;
   /** Library files it imports beyond the helper runtime, copied with it off home. */
   readonly files: readonly `sr/${string}.js`[];
+  /**
+   * Its control port, below REPLY_PORT_BASE, if it takes instructions: the
+   * conductor keeps the latest there and the worker peeks it, so a worker
+   * started again finds them waiting.
+   */
+  readonly control?: number;
+  /** Start it on home only with the home reserve still free beside it (`homeReserveGb` in decide.ts). */
+  readonly homeHeadroom?: boolean;
 }
 
 export const WORKERS = {
   trader: { script: "sr/h/trader.js", port: 1, files: ["sr/trades.js"] },
+  // #53: the money engine. Its orders (RAM split, home reserve) are on its
+  // control port. Its argument is { control }, plus the jobs it had in
+  // flight when it starts itself again on home.
+  engine: {
+    script: "sr/h/engine.js",
+    port: 2,
+    control: 3,
+    files: ["sr/money-engine.js", "sr/formulas.js"],
+    homeHeadroom: true,
+  },
 } as const satisfies Record<string, WorkerSpec>;
 
 export type WorkerName = keyof typeof WORKERS;

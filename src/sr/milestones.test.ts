@@ -15,6 +15,7 @@ function snap(route: RouteFacts | null, over: Partial<Snapshot> = {}): Snapshot 
     probesInFlight: [],
     callRunning: false,
     workers: {},
+    controls: {},
     ...over,
   };
 }
