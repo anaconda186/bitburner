@@ -15,16 +15,17 @@
 // Singularity calls; expensive reads belong to probe helpers.
 import type { NS } from "@ns";
 import { backoffMs } from "./backoff.ts";
-import { decide, type Action, type ProbeReading, type Snapshot } from "./decide.ts";
+import { decide, type Action, type ProbeReading, type Snapshot, type WorkerView } from "./decide.ts";
 import { awaitReply, isScriptDeath, launchHelper, pollReply, replyPorts, type Launched } from "./helper-calls.ts";
-import type { Json, Reply } from "./helper-contract.ts";
-import { HELPER_SCRIPTS, PROBES, type HelperScript, type ProbeName, type ProbeValues } from "./helpers.ts";
+import { readWorkerReport, type Json, type Reply } from "./helper-contract.ts";
+import { HELPER_SCRIPTS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName } from "./helpers.ts";
 import { MILESTONES, milestonesReached } from "./milestones.ts";
 import { openRunState } from "./run-state.ts";
 import { finishSummary, formatDuration, runFinished, splitLine, splitStats } from "./splits.ts";
 import {
   accountStart, buildOnHome, MANIFEST_FILE, noteBuild, reachedMilestones, recordMilestone, type ConductorStart,
 } from "./state.ts";
+import { afterLaunch, NO_WORKER, observeWorker, type WorkerBook } from "./workers.ts";
 
 /** Time between iterations when nothing went wrong. */
 const TICK_MS = 1000;
@@ -41,7 +42,34 @@ type Memory = {
   lingeringCall: number | undefined;
   lastCall: Snapshot["lastCall"];
   nextPort: () => number;
+  /** Each long-lived worker launched or found alive since this conductor started. */
+  workers: { [W in WorkerName]?: WorkerBook };
 };
+
+/**
+ * Where each worker stands: alive if the process this conductor launched, or
+ * the one named in the worker's own status report, is running. The report
+ * lets a conductor started again by boot find a worker it didn't launch;
+ * after a reload the port is empty and nothing is running.
+ */
+function readWorkers(ns: NS, m: Memory, nowMs: number): Snapshot["workers"] {
+  const views: { [W in WorkerName]?: WorkerView } = {};
+  for (const name of Object.keys(WORKERS) as WorkerName[]) {
+    const report = readWorkerReport(ns.getPortHandle(WORKERS[name].port).peek());
+    const book = m.workers[name];
+    if (book === undefined && report === undefined) continue;
+    const alivePid = [book?.pid, report?.pid].find((pid) => pid !== undefined && ns.isRunning(pid));
+    const next = observeWorker(book ?? NO_WORKER, alivePid, nowMs);
+    m.workers[name] = next;
+    views[name] = {
+      running: alivePid !== undefined,
+      failures: next.failures,
+      ...(next.lastFailAtMs !== undefined ? { lastFailAtMs: next.lastFailAtMs } : {}),
+      ...(report ? { report } : {}),
+    };
+  }
+  return views;
+}
 
 /** Moves every landed probe reply into the readings. */
 function collectProbes(ns: NS, m: Memory): void {
@@ -76,14 +104,16 @@ function takeSnapshot(ns: NS, m: Memory): Snapshot {
   const helperRamGb: Partial<Record<HelperScript, number>> = {};
   for (const script of HELPER_SCRIPTS) helperRamGb[script] = ns.getScriptRam(script, "home");
   if (m.lingeringCall !== undefined && !ns.isRunning(m.lingeringCall)) m.lingeringCall = undefined;
+  const nowMs = Date.now();
   return {
-    nowMs: Date.now(),
+    nowMs,
     freeRamGb: readFreeRam(ns, m),
     helperRamGb,
     probes: { ...m.probes },
     probesInFlight: [...m.inFlight.keys()],
     callRunning: m.lingeringCall !== undefined,
     ...(m.lastCall ? { lastCall: m.lastCall } : {}),
+    workers: readWorkers(ns, m, nowMs),
   };
 }
 
@@ -101,6 +131,15 @@ async function carryOut(ns: NS, m: Memory, actions: readonly Action[]): Promise<
         const reply = await callHelper(ns, m, action.script, action.host, action.arg);
         m.lastCall = { script: action.script, arg: action.arg, atMs: Date.now(), reply };
         ns.print(reply.ok ? `call ${action.script}: ok` : `call ${action.script}: failed: ${reply.error}`);
+        break;
+      }
+      case "start": {
+        const spec = WORKERS[action.worker];
+        const launched = launchHelper(ns, spec.script, action.host, action.arg, spec.port, spec.files);
+        const pid = "pid" in launched ? launched.pid : undefined;
+        m.workers[action.worker] = afterLaunch(m.workers[action.worker] ?? NO_WORKER, pid, Date.now());
+        if ("pid" in launched) ns.tprint(`conductor: started ${action.worker} on ${action.host}`);
+        else ns.tprint(`WARN conductor: ${action.worker} not started: ${launched.error}`);
         break;
       }
       default: {
@@ -133,7 +172,7 @@ export async function main(ns: NS): Promise<void> {
   const start: ConductorStart = { atMs: Date.now(), savedUpdatedAt: record.state.updatedAt };
   record.update((state) => noteBuild(state, buildOnHome(ns.read(MANIFEST_FILE)), start.atMs));
   let startAccounted = false;
-  const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts() };
+  const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts(), workers: {} };
   let beats = 0;
   let lastTerminalBeat = Date.now();
   let failures = 0;

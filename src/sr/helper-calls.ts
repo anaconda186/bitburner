@@ -32,13 +32,21 @@ export function isScriptDeath(e: unknown): boolean {
 export type LaunchFailure = { readonly ok: false; readonly error: string };
 
 /**
- * Starts `script` on `host` with its argument and a fresh reply port, copying
- * it (and the helper runtime) there first when `host` is not home.
+ * Starts `script` on `host` with its argument and a port (a fresh reply port
+ * for a helper, its status port for a worker), copying it, the helper
+ * runtime and any `files` it imports there first when `host` is not home.
  */
-export function launchHelper(ns: NS, script: HelperScript, host: string, arg: Json, port: number): Launched | LaunchFailure {
+export function launchHelper(
+  ns: NS,
+  script: HelperScript,
+  host: string,
+  arg: Json,
+  port: number,
+  files: readonly string[] = [],
+): Launched | LaunchFailure {
   try {
     ns.clearPort(port);
-    if (host !== "home" && !ns.scp([script, ...HELPER_RUNTIME], host, "home")) {
+    if (host !== "home" && !ns.scp([script, ...HELPER_RUNTIME, ...files], host, "home")) {
       return { ok: false, error: `could not copy ${script} to ${host}` };
     }
     const pid = ns.exec(script, host, { threads: 1, temporary: true }, JSON.stringify(arg), port);

@@ -7,7 +7,9 @@
 // `h/serve.ts`), give it a row in `tools/ram-budget.ts`, then add it here:
 //   - a probe (a read that fills a snapshot field) goes in PROBES, with its
 //     value type in ProbeValues and how stale it may get;
-//   - an action helper (a call that changes the game) goes in CALLS.
+//   - an action helper (a call that changes the game) goes in CALLS;
+//   - a long-lived worker (it keeps running and reports on its own port)
+//     goes in WORKERS.
 
 import type { Reply } from "./helper-contract.ts";
 import type { RouteFacts } from "./order.ts";
@@ -40,6 +42,8 @@ export interface ProbeValues {
   stats: { readonly hack: number; readonly money: number; readonly M: number; readonly homeRam: number };
   /** Sleeves owned (#49). Only launched where sleeves can exist (`sleevesPossible`). */
   sleeves: { readonly count: number };
+  /** Whether the TIX API, which every stock call needs, is owned (#72: the BN8 trader waits for it). */
+  market: { readonly hasTixApi: boolean };
 }
 
 export type ProbeName = keyof ProbeValues;
@@ -74,13 +78,36 @@ export const PROBES: { readonly [P in ProbeName]: ProbeSpec } = {
     maxAgeMs: 300_000,
     onlyIf: (readings) => readings.route?.ok === true && sleevesPossible(readings.route.value),
   },
+  // Changes when TIX is bought (or at a reset, which restarts the conductor).
+  market: { script: "sr/h/market.js", maxAgeMs: 30_000 },
 };
 
 /** Action helpers, by name. Launched one at a time and awaited. None yet. */
 export const CALLS: Readonly<Record<string, HelperScript>> = {};
 
+/**
+ * A long-lived worker (spec #41: the money engine, the BN8 trader, ...): a
+ * helper-shaped script that keeps running. It is launched like a helper
+ * (args[0] its JSON argument, args[1] its status port) and posts a
+ * WorkerReport to that port as it works (`helper-contract.ts`).
+ */
+export interface WorkerSpec {
+  readonly script: HelperScript;
+  /** Its fixed status port, below REPLY_PORT_BASE. */
+  readonly port: number;
+  /** Library files it imports beyond the helper runtime, copied with it off home. */
+  readonly files: readonly `sr/${string}.js`[];
+}
+
+export const WORKERS = {
+  trader: { script: "sr/h/trader.js", port: 1, files: ["sr/trades.js"] },
+} as const satisfies Record<string, WorkerSpec>;
+
+export type WorkerName = keyof typeof WORKERS;
+
 /** Every helper script, for the RAM costs in the snapshot. */
 export const HELPER_SCRIPTS: readonly HelperScript[] = [
   ...Object.values(PROBES).map((p) => p.script),
   ...Object.values(CALLS),
+  ...Object.values(WORKERS).map((w) => w.script),
 ];
