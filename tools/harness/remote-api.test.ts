@@ -16,6 +16,16 @@ async function fakeGame(port: number): Promise<WebSocket> {
       const f = files[msg.params.filename];
       answer(f === undefined ? { error: `File does not exist. Filename: ${msg.params.filename}` } : { result: f });
     } else if (msg.method === "calculateRam") answer({ result: 1.6 });
+    else if (msg.method === "pushFile") {
+      const p = msg.params as unknown as { filename: string; content: string; server: string };
+      if (p.server !== "home") answer({ error: "Server hostname invalid" });
+      else {
+        files[p.filename] = p.content;
+        answer({ result: "OK" });
+      }
+    } else if (msg.method === "getSaveFile")
+      // v3.0.1 MessageHandlers.ts: a binary save goes one char per byte.
+      answer({ result: { identifier: "abc", binary: true, save: String.fromCharCode(0x1f, 0x8b, 0xff, 0x00) } });
     else answer({ error: "Unknown message received" });
   });
   await new Promise((ok) => ws.once("open", ok));
@@ -46,6 +56,32 @@ describe("startRemoteApi", () => {
     await expect(api.getFile("sr/nope.json")).rejects.toThrow(RemoteApiError);
   });
 
+  it("pushes a file into the game, and the game holds it", async () => {
+    api = await startRemoteApi();
+    await fakeGame(api.port);
+    await api.waitForGame(5000);
+    await api.pushFile("sr/x.js", "export async function main() {}");
+    expect(await api.getFile("sr/x.js")).toBe("export async function main() {}");
+    await expect(api.pushFile("sr/x.js", "", "nowhere")).rejects.toThrow(RemoteApiError);
+  });
+
+  it("returns the game's save as its bytes", async () => {
+    api = await startRemoteApi();
+    await fakeGame(api.port);
+    await api.waitForGame(5000);
+    expect([...(await api.getSaveFile())]).toEqual([0x1f, 0x8b, 0xff, 0x00]);
+  });
+
+  it("listens on a port of the caller's choosing, so a game's saved settings keep working", async () => {
+    const probe = await startRemoteApi();
+    const port = probe.port;
+    await probe.close();
+    api = await startRemoteApi("127.0.0.1", port);
+    expect(api.port).toBe(port);
+    await fakeGame(port);
+    expect(await api.waitForGame(5000)).toBe(true);
+  });
+
   it("reports no game when none connects in time", async () => {
     api = await startRemoteApi();
     expect(await api.waitForGame(50)).toBe(false);
@@ -63,5 +99,15 @@ describe("startRemoteApi", () => {
     await fakeGame(api.port);
     expect(await api.waitForGame(5000, before)).toBe(true);
     expect(await api.getFile("sr/state.json")).toBe('{"v":1}');
+  });
+
+  it("listens on the port asked for, so a game's saved settings keep working", async () => {
+    const free = await startRemoteApi();
+    const port = free.port;
+    await free.close();
+    api = await startRemoteApi("127.0.0.1", port);
+    expect(api.port).toBe(port);
+    await fakeGame(port);
+    expect(await api.waitForGame(5000)).toBe(true);
   });
 });

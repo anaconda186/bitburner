@@ -13,6 +13,10 @@
     "ram-check": "node tools/ram-check.ts",
     "smoke": "node tools/smoke.ts",
     "record-formulas": "node tools/record-formulas.ts",
+    "dev": "node tools/dev.ts",
+    "scenario": "node tools/scenario.ts",
+    "live": "node tools/live.ts",
+    "compare": "node tools/compare.ts",
     "publish-release": "node tools/publish.ts"
   },
   "devDependencies": {

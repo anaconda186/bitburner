@@ -13,3 +13,7 @@ build/
 runs/
 # smoke test evidence from failed attempts (npm run smoke)
 .smoke/
+# dev loop compiles (npm run dev, npm run scenario)
+.dev/
+# lab saves: edited saves for measuring the game, never milestone saves
+lab-saves/

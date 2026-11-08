@@ -34,6 +34,10 @@ export interface RemoteApi {
   /** The game's own RAM figure for a script on `server`, in GB. */
   calculateRam(filename: string, server?: string): Promise<number>;
   getFileNames(server?: string): Promise<string[]>;
+  /** Writes a file into the game (created or replaced). Throws RemoteApiError if the game refuses it. */
+  pushFile(filename: string, content: string, server?: string): Promise<void>;
+  /** The game's save as it would export it: gzip bytes in Chromium. */
+  getSaveFile(): Promise<Uint8Array>;
   close(): Promise<void>;
 }
 
@@ -44,9 +48,9 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
-/** Listens on `host`, on a free port. */
-export async function startRemoteApi(host = "127.0.0.1"): Promise<RemoteApi> {
-  const wss = new WebSocketServer({ host, port: 0 });
+/** Listens on `host`, on `listenPort` (0, the default: a free one). */
+export async function startRemoteApi(host = "127.0.0.1", listenPort = 0): Promise<RemoteApi> {
+  const wss = new WebSocketServer({ host, port: listenPort });
   await new Promise<void>((ok, fail) => {
     wss.once("listening", ok);
     wss.once("error", fail);
@@ -137,6 +141,17 @@ export async function startRemoteApi(host = "127.0.0.1"): Promise<RemoteApi> {
     },
     async getFileNames(server = "home") {
       return (await call("getFileNames", { server })) as string[];
+    },
+    async pushFile(filename, content, server = "home") {
+      await call("pushFile", { filename, content, server });
+    },
+    async getSaveFile() {
+      // v3.0.1 MessageHandlers.ts: {identifier, binary, save}; a binary save
+      // comes one char per byte, a text one (no CompressionStream) as base64.
+      const r = (await call("getSaveFile", undefined, 60_000)) as { binary?: unknown; save?: unknown };
+      if (typeof r?.save !== "string") throw new RemoteApiError(`getSaveFile answered ${JSON.stringify(r)?.slice(0, 200)}`);
+      if (r.binary !== true) throw new RemoteApiError("getSaveFile: the game gave a text save, not gzip (no CompressionStream?)");
+      return Uint8Array.from(r.save, (c) => c.charCodeAt(0));
     },
     async close() {
       for (const s of wss.clients) s.terminate();

@@ -14,6 +14,10 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 | `npm run ram-check` | The static RAM budget gate over `build/` (run `build` first; `-- --build <dir>` for another folder). |
 | `npm run smoke` | The Playwright smoke test over `build/` in the real game (run `build` first). `-- --once` skips the retry, `--headed` shows the window, `--build <dir>` tests another folder. Needs Chromium once: `npx playwright install chromium`. |
 | `npm run record-formulas` | Dev only: re-record the formula model's golden values (`test/golden/formulas.json`) with `ns.formulas.*` in the real game, on lab saves. `-- --headed` shows the window. Never part of CI. |
+| `npm run dev` | The dev loop (#50): compiles `src/` on every change and pushes it into the connected game over the Remote API (port 12525 by default), and captures a milestone save whenever the run reaches a new milestone. `-- --open new` or `--open <milestone>` opens the game in its own window, and `--lab <save.gz>` resumes a lab save. |
+| `npm run scenario -- <milestone>` | A scenario test, local only: loads `saves/<milestone>.gz`, types the start command once, and passes when the run reaches the next milestone (or `--until <name>`) on the current build. Headed, with `--timeout 12h` by default. Refuses to run in CI. |
+| `npm run live` | The live split reader (#51): our Remote API server on port 12525 (`-- --port`, `--host`). Point the game's Options → Remote API at it and press Connect. It prints the split table whenever `sr/state.json` changes and exports the run at the finish line. `-- --once` prints once, `--export` exports now; both then exit. |
+| `npm run compare -- <a.json> <b.json>` | Compares two exported runs, net times by default (`--gross`, `--both`). Exits 1 on runs of different categories. |
 | `npm run publish-release` | Push `build/` to the orphan `release` branch. CI runs it; for a local try, `-- --remote <path to a bare repo>`. |
 
 ## Folders
@@ -22,11 +26,15 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 |---|---|
 | `src/` | Game scripts in TypeScript. **`src/` mirrors home:** `src/boot.ts` becomes `boot.js` at the root, and every other script goes under `src/sr/`. Nothing else may live in `src/` except tests. |
 | `src/**/*.test.ts` | Unit tests, next to the code they test (seams A–E). Never compiled into `build/`. |
-| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, later `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
+| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, `dev`, `scenario`, `live`, `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
 | `tools/harness/` | The Playwright harness (#46): the game in Chromium, the local release, our Remote API server and the smoke test's pure verdicts. Reused by the dev loop and scenario tests. |
 | `test/` | Tests and checks that belong to no single file, such as `ns-api-guard.ts`, which proves the typecheck catches Netscript misuse, and `ci-gate.test.ts`, which pins the gate order in the workflow. |
 | `test/golden/` | Golden-value fixtures recorded from the real game (`formulas.json`, by `npm run record-formulas`). Never edited by hand. |
+| `runs/` | gitignored. Exported runs, `<date>-<category>-<build>.json`, and the rollback watcher's logs in `runs/watch/<startedAt>.json`. |
 | `.smoke/` | gitignored. A failed smoke attempt's screenshot and terminal text (CI uploads it as the `smoke-evidence` artifact). |
+| `saves/` | Milestone saves (#50), committed: `<milestone>.gz` (the game's own gzip save) plus the sidecar `<milestone>.json`. A scoped milestone's `:` is spelled `~` in the file name. Written only by the listener. |
+| `lab-saves/` | gitignored. Lab saves, in the same format with `kind: "lab"`. Never a scenario start. |
+| `.dev/` | gitignored. The dev loop's throwaway compiles. |
 | `.game/` | gitignored. `app/` = the v3.0.1 static build (the zip's `resources/app/`), `source/<repo path>` = pinned game source files. The game's code is never committed. |
 | `build/` | gitignored. Exactly the files the release ships. |
 
@@ -172,6 +180,56 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 - **Never click or type with bare Playwright calls in the game.** A loaded save opens the Offline dialog about 250 ms after the terminal appears, and it blocks clicks and takes the focus. Use `clickThrough` (inside the helpers) and `typeLine`, which close dialogs and retry.
 - **Always press Connect after a load.** The game's own auto-connect fires once, 2 s after page start, before the save (and so the port) has loaded. See `docs/research/headless-game.md` §6 for this and the throttling findings.
 - **Browser:** the pinned `playwright` (exact version in `package.json`) and its Chromium; CI installs it with `npx playwright install --with-deps chromium` and caches `~/.cache/ms-playwright`.
+
+## Dev loop, milestone saves and scenario tests (set by #50)
+
+- **Push watcher** (`npm run dev`, `tools/dev.ts`):
+  - It serves the Remote API on `--port` (12525 by default, the game's own placeholder), so any game can connect to it from Options → Remote API.
+  - It compiles `src/` into a throwaway folder under `.dev/` (`compile` in `tools/harness/devloop.ts`), so `build/` stays the smoke test's.
+  - On a change under `src/` (tests excluded), it recompiles and pushes only the changed files plus `manifest.json` (`pushPlan` in `tools/harness/push.ts`). A game that connects or reconnects gets the whole build.
+  - A pushed script takes effect at its next start. Helpers are launched fresh each time, so they run new code at once. The conductor runs it after a reload and one retype, or after `kill` and `run boot.js`.
+  - A local build's `source` is `devSource(head, dirty, sha)`: the commit when `src/` is clean, `<commit>-dirty-<8 hex of the build>` otherwise. So the state file's `builds` tells edited builds apart.
+  - `--open new|<milestone>` opens the game in its own window. The raw URLs are answered from the latest local build (`followingRelease`), so boot.js fetches it as well. After a reload of that window, it presses Connect again by itself.
+- **Milestone saves** (`tools/harness/saves.ts`):
+  - **The listener** (`startListener` in `devloop.ts`) reads `sr/state.json` every 2 s. When `milestoneToCapture(seen, now)` names a milestone, it calls `getSaveFile` and `storeCapture` writes `saves/<name>.gz` and `saves/<name>.json`. A capture of the same milestone replaces both files.
+  - **What counts:** only a change it saw, to a milestone the run hadn't reached. Its first reading doesn't count, nor does a reload rolling back to an earlier milestone or a different `startedAt` (another run loaded). When one loop reaches several milestones, the save is filed under the last.
+  - **The sidecar** (`Sidecar`) is read from the save itself: `kind`, `milestone`, `build` (the state's `currentBuild`), `gameVersion` (`GAME_VERSION`), `capturedAt`, `category`, `startedAt`, `bitNodeN` and `sourceFiles`.
+- **Lab saves are kept apart by a mark in the save, not by where the file sits:**
+  - `markLabSave` puts `lab-save.txt` (`LAB_MARKER`) on home. Home keeps text files through installs and BitNode entries, so every later save of that game carries the mark too.
+  - `saveFacts` treats the marker, or any game exploit flag, as a lab save. Captures of a lab game go to `lab-saves/` with `kind: "lab"`.
+  - `npm run dev -- --lab <file>` marks a save before loading it. **A throwaway script that loads an edited save into a watched game must mark it the same way.**
+- **Scenario tests** (`npm run scenario -- <milestone>`, `tools/scenario.ts`):
+  - **Start:** it takes a milestone name, never a path. `loadScenarioSave` reads only `saves/`, and `scenarioStart` refuses a missing sidecar, a lab save (by its sidecar or its contents), another target version, or a sidecar that doesn't match the save's state file.
+  - **Load:** `resumeFromSave` seeds IndexedDB, loads the game, presses Connect and types the start command once, as a player does after a reload.
+  - **RAM cross-check:** once the state file shows the build under test, the RAM cross-check runs in the save's own context, `{ bitNodeN, sourceFiles }` from the save (`staticRam(files, context)`), not BN1.1.
+  - **Verdict:** `judgeScenario` in `tools/harness/scenario-verdict.ts`.
+    - It passes when the save's run (same `startedAt`) reaches `--until`, or else any milestone the save didn't have, on the build under test.
+    - It fails on any error line in the terminal after the typed command, a page error, a game error dialog, a RAM mismatch, a new run, or `--timeout` (12h by default).
+    - Terminal lines are diffed with `newLines`, which copes with the terminal dropping its oldest lines when full.
+  - **Captures:** milestones it reaches on the way are captured like the dev loop's (`--no-capture` turns this off).
+  - **Options:** `--build <dir>` tests a built folder instead of compiling, and `--root <dir>` moves `saves/` and `lab-saves/` elsewhere (both are for checks). `--headless` exists for checks too; the default is headed.
+  - **Never in CI:** it exits at once under `GITHUB_ACTIONS` or `CI`, and `test/ci-gate.test.ts` fails if the workflow mentions it.
+- **Remote API additions:** `startRemoteApi(host, listenPort)` takes a fixed port, plus `pushFile(filename, content, server?)` and `getSaveFile()`, which returns gzip bytes and refuses a text save.
+
+## Live reader, exports and compare (set by #51)
+
+- **Pure rules (seam E), `tools/runs.ts`:**
+  - **The rollback watcher's log** (`WatchLog = { startedAt, windows, seen }`): `watchState(log, state, nowMs)` adds every split read (`Seen = { milestone, ms }`) and the time it was watching. Two reads more than `WATCH_GAP_MS` (60 s) apart start a new window. A state with another `startedAt` starts a new log.
+  - `rolledBack(log, state)` lists the splits the watcher saw that the state no longer has, whether or not the run reached the milestone again later (a re-reach has a different `ms`). `watchedMs(log)` is the time watched. `attached(log)` drops a log that watched for no time (a single read), so a one-off export counts as unwatched.
+  - `rollbackText(r)` is the only wording: `rollbacks unobserved` without a watcher, `rollbacks: none seen, watched X of Y` or `rollbacks: N (names), watched X of Y` with one. Never "none" without a watcher.
+  - **Exports:** `exportName(state)` is `<start as 2026-11-07T153012Z>-<category>-<first 7 of buildSha>.json`. The start time to the second keeps two runs of one build on one day apart and sorts the names. `exportText(state, log, nowMs)` writes `{ export: 1, exportedAt, state, watch }`. `parseRun(text)` reads that, or a state file copied out by hand (an unwatched run), through `parseState`, and drops a log of another run. A newer `export` format is refused.
+  - `liveTable(state, nowMs, log)` gives the reader's table: the run's header (category, start, builds, gross, net, reloads, installs), one line per split (gross, net, net segment, build, installs, stats), the splits seen rolled back in time order, then `rollbackText`.
+- **`compare` (seam E), `tools/compare.ts`:** `compare(a, b)` returns `{ ok: false, error }` for different categories. Otherwise it gives a `Report` with one `Row` per milestone of either run.
+  - Order: A's milestones (rolled-back ones included, by time), with each of B's own milestones placed after the one B reached before it.
+  - A segment runs from the previous milestone both runs reached (or the start). So a skipped milestone doesn't distort the next segment, and a segment delta is always the change in the split delta.
+  - Deltas are B − A (positive means B was slower), as `Times = { grossMs, netMs }`, or null where either side has a gap.
+  - `Side.builds` lists every build that ran in the segment, from `buildSha` and the `builds` records' wall-clock `fromMs`. `buildsDiffer` is set where both runs reached the milestone and those lists differ.
+  - `renderCompare(report, { columns: "net" | "gross" | "both", labels })` gives the text. Net is the default. A gap shows as `gap`, a milestone lost and never re-reached as `rolled back`, and a missing delta as `-`. The notes column says `builds differ` and `rolled back in A/B`.
+- **The live reader, `tools/live.ts`:**
+  - `watchRun(api, { outDir, everyMs, show, log })` works on any `RemoteApi`. It polls `getFile("sr/state.json")`, keeps the watcher's log in `runs/watch/<startedAt>.json` (reloaded on restart, so the log survives a restart of the reader), calls `show` when the file or the log changes, and exports when `runFinished(state)` first holds. `exportNow()` exports the last run read.
+  - **The game connects to one Remote API server at a time.** Anything else that runs a server, such as the dev loop, should attach `watchRun` to its own server rather than run `npm run live` beside it.
+  - `startRemoteApi(host, listenPort = 0)` takes the port as an optional second argument, so a real game's saved Remote API settings keep working across restarts.
+- **Not unit tested:** the CLI shells (`live.ts`, compare's `import.meta.main`). The scratchpad's `verify/t51-live.ts` checked them in the real game.
 
 ## CI (`.github/workflows/ci.yml`)
 
