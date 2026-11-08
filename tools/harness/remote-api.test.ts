@@ -100,4 +100,14 @@ describe("startRemoteApi", () => {
     expect(await api.waitForGame(5000, before)).toBe(true);
     expect(await api.getFile("sr/state.json")).toBe('{"v":1}');
   });
+
+  it("listens on the port asked for, so a game's saved settings keep working", async () => {
+    const free = await startRemoteApi();
+    const port = free.port;
+    await free.close();
+    api = await startRemoteApi("127.0.0.1", port);
+    expect(api.port).toBe(port);
+    await fakeGame(port);
+    expect(await api.waitForGame(5000)).toBe(true);
+  });
 });

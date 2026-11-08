@@ -16,6 +16,8 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 | `npm run record-formulas` | Dev only: re-record the formula model's golden values (`test/golden/formulas.json`) with `ns.formulas.*` in the real game, on lab saves. `-- --headed` shows the window. Never part of CI. |
 | `npm run dev` | The dev loop (#50): compiles `src/` on every change and pushes it into the connected game over the Remote API (port 12525 by default), and captures a milestone save whenever the run reaches a new milestone. `-- --open new` or `--open <milestone>` opens the game in its own window, and `--lab <save.gz>` resumes a lab save. |
 | `npm run scenario -- <milestone>` | A scenario test, local only: loads `saves/<milestone>.gz`, types the start command once, and passes when the run reaches the next milestone (or `--until <name>`) on the current build. Headed, with `--timeout 12h` by default. Refuses to run in CI. |
+| `npm run live` | The live split reader (#51): our Remote API server on port 12525 (`-- --port`, `--host`). Point the game's Options → Remote API at it and press Connect. It prints the split table whenever `sr/state.json` changes and exports the run at the finish line. `-- --once` prints once, `--export` exports now; both then exit. |
+| `npm run compare -- <a.json> <b.json>` | Compares two exported runs, net times by default (`--gross`, `--both`). Exits 1 on runs of different categories. |
 | `npm run publish-release` | Push `build/` to the orphan `release` branch. CI runs it; for a local try, `-- --remote <path to a bare repo>`. |
 
 ## Folders
@@ -24,10 +26,11 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 |---|---|
 | `src/` | Game scripts in TypeScript. **`src/` mirrors home:** `src/boot.ts` becomes `boot.js` at the root, and every other script goes under `src/sr/`. Nothing else may live in `src/` except tests. |
 | `src/**/*.test.ts` | Unit tests, next to the code they test (seams A–E). Never compiled into `build/`. |
-| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, later `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
+| `tools/` | Node-side scripts (`fetch-game`, `publish`, `ram-check`, `smoke`, `dev`, `scenario`, `live`, `compare`), in TypeScript run directly by Node (type stripping, no build step). Their tests sit beside them. |
 | `tools/harness/` | The Playwright harness (#46): the game in Chromium, the local release, our Remote API server and the smoke test's pure verdicts. Reused by the dev loop and scenario tests. |
 | `test/` | Tests and checks that belong to no single file, such as `ns-api-guard.ts`, which proves the typecheck catches Netscript misuse, and `ci-gate.test.ts`, which pins the gate order in the workflow. |
 | `test/golden/` | Golden-value fixtures recorded from the real game (`formulas.json`, by `npm run record-formulas`). Never edited by hand. |
+| `runs/` | gitignored. Exported runs, `<date>-<category>-<build>.json`, and the rollback watcher's logs in `runs/watch/<startedAt>.json`. |
 | `.smoke/` | gitignored. A failed smoke attempt's screenshot and terminal text (CI uploads it as the `smoke-evidence` artifact). |
 | `saves/` | Milestone saves (#50), committed: `<milestone>.gz` (the game's own gzip save) plus the sidecar `<milestone>.json`. A scoped milestone's `:` is spelled `~` in the file name. Written only by the listener. |
 | `lab-saves/` | gitignored. Lab saves, in the same format with `kind: "lab"`. Never a scenario start. |
@@ -206,7 +209,27 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
   - **Captures:** milestones it reaches on the way are captured like the dev loop's (`--no-capture` turns this off).
   - **Options:** `--build <dir>` tests a built folder instead of compiling, and `--root <dir>` moves `saves/` and `lab-saves/` elsewhere (both are for checks). `--headless` exists for checks too; the default is headed.
   - **Never in CI:** it exits at once under `GITHUB_ACTIONS` or `CI`, and `test/ci-gate.test.ts` fails if the workflow mentions it.
-- **Remote API additions:** `startRemoteApi(host, port)` takes a fixed port, plus `pushFile(filename, content, server?)` and `getSaveFile()`, which returns gzip bytes and refuses a text save.
+- **Remote API additions:** `startRemoteApi(host, listenPort)` takes a fixed port, plus `pushFile(filename, content, server?)` and `getSaveFile()`, which returns gzip bytes and refuses a text save.
+
+## Live reader, exports and compare (set by #51)
+
+- **Pure rules (seam E), `tools/runs.ts`:**
+  - **The rollback watcher's log** (`WatchLog = { startedAt, windows, seen }`): `watchState(log, state, nowMs)` adds every split read (`Seen = { milestone, ms }`) and the time it was watching. Two reads more than `WATCH_GAP_MS` (60 s) apart start a new window. A state with another `startedAt` starts a new log.
+  - `rolledBack(log, state)` lists the splits the watcher saw that the state no longer has, whether or not the run reached the milestone again later (a re-reach has a different `ms`). `watchedMs(log)` is the time watched. `attached(log)` drops a log that watched for no time (a single read), so a one-off export counts as unwatched.
+  - `rollbackText(r)` is the only wording: `rollbacks unobserved` without a watcher, `rollbacks: none seen, watched X of Y` or `rollbacks: N (names), watched X of Y` with one. Never "none" without a watcher.
+  - **Exports:** `exportName(state)` is `<start as 2026-11-07T153012Z>-<category>-<first 7 of buildSha>.json`. The start time to the second keeps two runs of one build on one day apart and sorts the names. `exportText(state, log, nowMs)` writes `{ export: 1, exportedAt, state, watch }`. `parseRun(text)` reads that, or a state file copied out by hand (an unwatched run), through `parseState`, and drops a log of another run. A newer `export` format is refused.
+  - `liveTable(state, nowMs, log)` gives the reader's table: the run's header (category, start, builds, gross, net, reloads, installs), one line per split (gross, net, net segment, build, installs, stats), the splits seen rolled back in time order, then `rollbackText`.
+- **`compare` (seam E), `tools/compare.ts`:** `compare(a, b)` returns `{ ok: false, error }` for different categories. Otherwise it gives a `Report` with one `Row` per milestone of either run.
+  - Order: A's milestones (rolled-back ones included, by time), with each of B's own milestones placed after the one B reached before it.
+  - A segment runs from the previous milestone both runs reached (or the start). So a skipped milestone doesn't distort the next segment, and a segment delta is always the change in the split delta.
+  - Deltas are B − A (positive means B was slower), as `Times = { grossMs, netMs }`, or null where either side has a gap.
+  - `Side.builds` lists every build that ran in the segment, from `buildSha` and the `builds` records' wall-clock `fromMs`. `buildsDiffer` is set where both runs reached the milestone and those lists differ.
+  - `renderCompare(report, { columns: "net" | "gross" | "both", labels })` gives the text. Net is the default. A gap shows as `gap`, a milestone lost and never re-reached as `rolled back`, and a missing delta as `-`. The notes column says `builds differ` and `rolled back in A/B`.
+- **The live reader, `tools/live.ts`:**
+  - `watchRun(api, { outDir, everyMs, show, log })` works on any `RemoteApi`. It polls `getFile("sr/state.json")`, keeps the watcher's log in `runs/watch/<startedAt>.json` (reloaded on restart, so the log survives a restart of the reader), calls `show` when the file or the log changes, and exports when `runFinished(state)` first holds. `exportNow()` exports the last run read.
+  - **The game connects to one Remote API server at a time.** Anything else that runs a server, such as the dev loop, should attach `watchRun` to its own server rather than run `npm run live` beside it.
+  - `startRemoteApi(host, listenPort = 0)` takes the port as an optional second argument, so a real game's saved Remote API settings keep working across restarts.
+- **Not unit tested:** the CLI shells (`live.ts`, compare's `import.meta.main`). The scratchpad's `verify/t51-live.ts` checked them in the real game.
 
 ## CI (`.github/workflows/ci.yml`)
 

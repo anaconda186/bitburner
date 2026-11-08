@@ -178,3 +178,11 @@ _Avoid_: Lap, segment time
 **Reload loss**:
 The real time a page reload costs a run: the rollback to the last autosave plus the time until the run is going again, including the human's retype. A split's gross time includes it; its net time subtracts it.
 _Avoid_: Downtime, penalty
+
+**Segment**:
+The real time between two milestones of a run. When two runs are compared, it runs from the previous milestone both reached, so a milestone one run skipped doesn't distort it.
+_Avoid_: Split (a split always runs from the start), lap
+
+**Rolled-back milestone**:
+A milestone the state file once recorded and a page reload later took away, because the save it went back to was older. Only the rollback watcher can see one; without it, rollbacks are unobserved, not absent.
+_Avoid_: Lost split, undone milestone

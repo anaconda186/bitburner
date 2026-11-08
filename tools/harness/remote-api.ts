@@ -48,7 +48,7 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
-/** Listens on `host`, on `port` (default 0: a free one). */
+/** Listens on `host`, on `listenPort` (0, the default: a free one). */
 export async function startRemoteApi(host = "127.0.0.1", listenPort = 0): Promise<RemoteApi> {
   const wss = new WebSocketServer({ host, port: listenPort });
   await new Promise<void>((ok, fail) => {
