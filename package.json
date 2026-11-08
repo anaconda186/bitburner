@@ -12,6 +12,8 @@
     "build": "node -e \"require('fs').rmSync('build',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "ram-check": "node tools/ram-check.ts",
     "smoke": "node tools/smoke.ts",
+    "dev": "node tools/dev.ts",
+    "scenario": "node tools/scenario.ts",
     "publish-release": "node tools/publish.ts"
   },
   "devDependencies": {

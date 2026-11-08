@@ -22,7 +22,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { GAME_DIR } from "./fetch-game.ts";
 import { RAM_CONTEXTS } from "./ram-budget.ts";
-import { loadRamCalculator, type RamResult } from "./ram-calc.ts";
+import { loadRamCalculator, type RamContext, type RamResult } from "./ram-calc.ts";
 import {
   connectRemoteApi,
   errorDialogs,
@@ -202,7 +202,8 @@ function maxStateAge(states: readonly StateRead[]): number | undefined {
   return max;
 }
 
-async function gameRam(api: RemoteApi, scripts: readonly string[]): Promise<Map<string, GameRam>> {
+/** The game's own price, on home, of each of `scripts`. */
+export async function gameRam(api: RemoteApi, scripts: readonly string[]): Promise<Map<string, GameRam>> {
   const out = new Map<string, GameRam>();
   for (const s of scripts) {
     out.set(
@@ -240,11 +241,14 @@ async function leaveEvidence(session: GameSession, outDir: string, n: number): P
   await writeFile(join(outDir, `attempt-${n}-terminal.txt`), `${text}\n\nraw requests:\n${session.rawRequests.join("\n")}\n`);
 }
 
-/** Our static price of every script in the build, in a new game's context (BN1.1, no Source-Files). */
-export async function staticRam(files: ReadonlyMap<string, Uint8Array>): Promise<Map<string, RamResult>> {
+/**
+ * Our static price of every script in the build, in `context`: by default a
+ * new game's (BN1.1, no Source-Files). A scenario passes its save's own.
+ */
+export async function staticRam(files: ReadonlyMap<string, Uint8Array>, context: RamContext = RAM_CONTEXTS["BN1.1"]): Promise<Map<string, RamResult>> {
   const calc = await loadRamCalculator();
   const text = new Map([...files].filter(([f]) => f.endsWith(".js")).map(([f, b]) => [f, new TextDecoder().decode(b)]));
-  return new Map([...text.keys()].sort().map((f) => [f, calc(text, f, RAM_CONTEXTS["BN1.1"])]));
+  return new Map([...text.keys()].sort().map((f) => [f, calc(text, f, context)]));
 }
 
 export async function runSmoke(opts: SmokeOptions, once = false): Promise<boolean> {

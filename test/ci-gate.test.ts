@@ -33,6 +33,10 @@ describe("the CI release gate", () => {
     expect(smoke.body).toMatch(/npm run smoke -- --build build/);
   });
 
+  it("never runs a scenario test or the dev loop (spec #41: local only)", () => {
+    expect(workflow).not.toMatch(/npm run (scenario|dev)\b|tools\/(scenario|dev)\.ts/);
+  });
+
   it("lets no step carry on past a failure, and publishes only pushes to main", () => {
     expect(workflow).not.toMatch(/continue-on-error/);
     const publish = steps()[index("Publish to release")]!;
