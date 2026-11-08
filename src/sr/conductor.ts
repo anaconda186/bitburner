@@ -156,8 +156,8 @@ async function carryOut(ns: NS, m: Memory, actions: readonly Action[]): Promise<
         break;
       }
       case "start": {
-        const spec = WORKERS[action.worker];
-        const launched = launchHelper(ns, spec.script, action.host, action.arg, spec.port, spec.files);
+        const spec: WorkerSpec = WORKERS[action.worker];
+        const launched = launchHelper(ns, spec.script, action.host, action.arg, spec.port, spec.files, spec.survivesReload);
         const pid = "pid" in launched ? launched.pid : undefined;
         m.workers[action.worker] = afterLaunch(m.workers[action.worker] ?? NO_WORKER, pid, Date.now());
         if ("pid" in launched) ns.tprint(`conductor: started ${action.worker} on ${action.host}`);

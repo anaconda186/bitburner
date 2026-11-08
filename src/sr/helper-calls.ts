@@ -35,6 +35,7 @@ export type LaunchFailure = { readonly ok: false; readonly error: string };
  * Starts `script` on `host` with its argument and a port (a fresh reply port
  * for a helper, its status port for a worker), copying it, the helper
  * runtime and any `files` it imports there first when `host` is not home.
+ * Temporary unless `survivesReload` (the casino, #23).
  */
 export function launchHelper(
   ns: NS,
@@ -43,13 +44,14 @@ export function launchHelper(
   arg: Json,
   port: number,
   files: readonly string[] = [],
+  survivesReload = false,
 ): Launched | LaunchFailure {
   try {
     ns.clearPort(port);
     if (host !== "home" && !ns.scp([script, ...HELPER_RUNTIME, ...files], host, "home")) {
       return { ok: false, error: `could not copy ${script} to ${host}` };
     }
-    const pid = ns.exec(script, host, { threads: 1, temporary: true }, JSON.stringify(arg), port);
+    const pid = ns.exec(script, host, { threads: 1, temporary: !survivesReload }, JSON.stringify(arg), port);
     if (pid === 0) return { ok: false, error: `exec of ${script} on ${host} failed` };
     return { pid, port };
   } catch (e) {
