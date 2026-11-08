@@ -132,16 +132,42 @@ export function plannedAugReserve(_s: Snapshot): number {
 export function fleetWant(
   s: Snapshot, orders: EngineOrders, reserved: readonly string[], reserve: number = plannedAugReserve(s),
 ): Want | undefined {
+  const facts = freshFleet(s);
+  if (!(orders.split.money > 0) || facts === undefined) return undefined;
+  const step = fleetPurchase(facts, orders.mults, engineOutlook(s), reserve, reserved);
+  if (step === undefined) return undefined;
+  return { kind: "call", script: step.kind === "buy" ? BUY_SCRIPT : DOUBLE_SCRIPT, arg: { host: step.host, ram: step.ramGb } };
+}
+
+/**
+ * The fleet is bought (#58: the exp start begins): a fresh reading shows every
+ * slot owned, and the rule has no purchase it would make now (none pays back
+ * in time or none is affordable). Only `orders.mults` is read, so the money
+ * split may be off.
+ */
+export function fleetBought(s: Snapshot, orders: EngineOrders, reserve: number = plannedAugReserve(s)): boolean {
+  const facts = freshFleet(s);
+  if (facts === undefined || facts.servers.length < facts.limit) return false;
+  return fleetPurchase(facts, orders.mults, engineOutlook(s), reserve) === undefined;
+}
+
+/**
+ * The fleet reading, if it is fresh: taken after the last purchase call
+ * finished (its own `readAtMs`) and listing every server this conductor
+ * bought.
+ */
+function freshFleet(s: Snapshot): FleetFacts | undefined {
   const reading = s.probes.fleet;
-  if (!(orders.split.money > 0) || reading?.ok !== true) return undefined;
-  const mults = orders.mults;
+  if (reading?.ok !== true) return undefined;
   const last = s.lastCall;
   if (last !== undefined && FLEET_CALLS.includes(last.script) && last.atMs >= reading.value.readAtMs) return undefined;
   const listed = new Set(reading.value.servers.map((x) => x.host));
   if ((s.boughtServers ?? []).some((h) => !listed.has(h))) return undefined;
+  return reading.value;
+}
+
+/** The outlook in the engine's latest report. */
+function engineOutlook(s: Snapshot): EngineOutlook | undefined {
   const report = s.workers.engine?.report?.value;
-  const outlook = typeof report === "object" && report !== null ? readOutlook((report as { outlook?: unknown }).outlook) : undefined;
-  const step = fleetPurchase(reading.value, mults, outlook, reserve, reserved);
-  if (step === undefined) return undefined;
-  return { kind: "call", script: step.kind === "buy" ? BUY_SCRIPT : DOUBLE_SCRIPT, arg: { host: step.host, ram: step.ramGb } };
+  return typeof report === "object" && report !== null ? readOutlook((report as { outlook?: unknown }).outlook) : undefined;
 }

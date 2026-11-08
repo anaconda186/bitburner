@@ -287,9 +287,20 @@ describe("decide: the money engine", () => {
   });
 
   test("switches the engine off over the port in BN8, where hacking earns no money, and doesn't start it", () => {
+    // BN8's exp-only engine (story 104) is the BN8 tickets' to switch on, beside the trader's room.
     const bn8 = { ...bn1().probes, route: route(8) };
     expect(decide(bn1({ probes: bn8, controls: { engine: MONEY }, workers: running }))).toEqual([control(ORDERS_OFF)]);
     expect(decide(bn1({ probes: bn8 }))).toEqual([]);
+  });
+
+  test("all exp for the 10 minutes after the fleet is bought, then all money (story 62's exp start)", () => {
+    const EXP = { ...MONEY, split: { money: 0, exp: 1, sharing: 0 } };
+    const at = (boughtAgoMs: number) => decide(bn1({ fleetBoughtAtMs: NOW - boughtAgoMs, controls: { engine: MONEY }, workers: running }));
+    expect(at(0)).toEqual([control(EXP)]);
+    expect(at(599_999)).toEqual([control(EXP)]);
+    expect(at(600_000)).toEqual([]);
+    // Before the fleet is bought: all money (saving for planned purchases).
+    expect(decide(bn1({ controls: { engine: MONEY }, workers: running }))).toEqual([]);
   });
 
   test("and on again when the money split is wanted", () => {

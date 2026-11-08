@@ -204,8 +204,8 @@ function moneyJobs(s: EngineSnapshot, free: Map<string, number>, moneyPoolGb: nu
   const jobs: Job[] = [];
   // Targets the batches and preps are using (the farm keeps off them), and
   // with the farm's, every target drain keeps off: it would undo the work in flight there.
-  const using = (ps: readonly Purpose[]) =>
-    s.inFlight.filter((j) => ps.includes(j.purpose) && j.landsAtMs > s.nowMs).map((j) => j.target);
+  const using = (purposes: readonly Purpose[]) =>
+    s.inFlight.filter((j) => purposes.includes(j.purpose) && j.landsAtMs > s.nowMs).map((j) => j.target);
   const moneyBusy = new Set(using(["batch", "prep"]));
   const busy = new Set([...moneyBusy, ...using(["farm", "farmPrep"])]);
   if (choice !== undefined && moneyPoolGb > 0) moneyBusy.add(choice.target.host);

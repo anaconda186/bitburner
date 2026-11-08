@@ -14,7 +14,8 @@ import {
 import { nextDriverJob, readDriverNews, readDriverOrder, type City, type DriverOrder } from "./driver-jobs.ts";
 import { fleetWant } from "./fleet.ts";
 import { cloudServerCost, NEUTRAL_MULTS, type NodeMults } from "./formulas.ts";
-import { ORDERS_OFF, readOrders, SPLIT_MONEY, type EngineOrders } from "./money-engine.ts";
+import { ORDERS_OFF, readOrders, SPLIT_OFF, type EngineOrders, type RamSplit } from "./money-engine.ts";
+import { ramSplit, SPLIT_TUNABLES, type ResetPoint, type SplitTunables } from "./ram-split.ts";
 import { nodeMults } from "./node-mults.ts";
 
 /** The latest reply of one probe and when the conductor read it. */
@@ -55,6 +56,11 @@ export type Snapshot = {
    * bought after the network probe's last scan counts as there. Absent: none.
    */
   readonly boughtServers?: readonly string[];
+  /**
+   * When this conductor first saw the fleet bought (`fleetBought`, #58): the
+   * exp start runs from then. Absent: not yet, since this conductor started.
+   */
+  readonly fleetBoughtAtMs?: number;
 };
 
 /** A long-lived worker as the conductor sees it. */
@@ -195,16 +201,32 @@ export function homeReserveGb(s: Snapshot): number {
 }
 
 /**
- * The engine's orders (spec #41 "RAM split kinds"): all money, except in BN8,
- * where hacking earns no money (its exp farm is a later ticket), so off. Off
- * as well until the route probe has said where the run is.
+ * Where the run is in the reset, for the RAM split (#58): off until the route
+ * probe has said where the run is, and off in BN8, where hacking earns no
+ * money (its exp-only engine, story 104, is for the BN8 tickets to switch on:
+ * the engine's jobs would take the trader's room); the exp start for `expStartMs` after the fleet is bought; otherwise saving
+ * (all money). Hooks: #56 returns off while the casino runs, #59/#61/#65 the
+ * `working` point with the faction's favor, #64 the final `climb`.
+ */
+export function resetPoint(s: Snapshot, t: SplitTunables = SPLIT_TUNABLES): ResetPoint {
+  const route = s.probes.route;
+  if (route?.ok !== true) return { kind: "off" };
+  if (route.value.currentNode === 8) return { kind: "off" };
+  if (s.fleetBoughtAtMs !== undefined && s.nowMs - s.fleetBoughtAtMs < t.expStartMs) return { kind: "expStart" };
+  return { kind: "saving" };
+}
+
+/**
+ * The engine's orders (spec #41 "RAM split kinds"): the split for the point
+ * in the reset (`ramSplit`), the home reserve and the BitNode multipliers.
  */
 export function engineOrders(s: Snapshot): EngineOrders {
   const route = s.probes.route;
-  if (route?.ok !== true || route.value.currentNode === 8) return ORDERS_OFF;
+  const split = ramSplit(resetPoint(s));
+  if (route?.ok !== true || sameSplit(split, SPLIT_OFF)) return ORDERS_OFF;
   const reading = s.probes.bitnode;
   const mults = nodeMults(route.value, reading?.ok ? reading.value : undefined);
-  const orders = { split: SPLIT_MONEY, homeReserveGb: homeReserveGb(s), mults };
+  const orders = { split, homeReserveGb: homeReserveGb(s), mults };
   // The driver's room on its host stays free for it (a static reserve, so a
   // driver that died finds its room still there when it is started again).
   const driverGb = s.helperRamGb[WORKERS.driver.script] ?? 0;
@@ -217,12 +239,12 @@ const sameMults = (a: NodeMults, b: NodeMults): boolean =>
 const sameReserves = (a: EngineOrders["hostReserveGb"] = {}, b: EngineOrders["hostReserveGb"] = {}): boolean =>
   Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([h, gb]) => b[h] === gb);
 
+const sameSplit = (a: RamSplit, b: RamSplit): boolean => a.money === b.money && a.exp === b.exp && a.sharing === b.sharing;
+
 const sameOrders = (a: EngineOrders, b: EngineOrders): boolean =>
   a.homeReserveGb === b.homeReserveGb &&
   sameReserves(a.hostReserveGb, b.hostReserveGb) &&
-  a.split.money === b.split.money &&
-  a.split.exp === b.split.exp &&
-  a.split.sharing === b.split.sharing &&
+  sameSplit(a.split, b.split) &&
   sameMults(a.mults, b.mults);
 
 /**
