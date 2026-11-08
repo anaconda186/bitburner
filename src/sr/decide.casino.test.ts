@@ -3,7 +3,10 @@
 // money and RAM until it is done.
 import { describe, expect, test } from "vitest";
 import { CASINO_CAP } from "./blackjack.ts";
-import { decide, engineOrders, type Snapshot, type WorkerView } from "./decide.ts";
+import {
+  CASINO_TUNABLES, casinoSkipThresholdPerSec, decide, engineOrders, wantedCity, type Snapshot, type WorkerView,
+} from "./decide.ts";
+import { MILESTONES, milestonesReached } from "./milestones.ts";
 import type { DriverNews } from "./driver-jobs.ts";
 import type { Json } from "./helper-contract.ts";
 import { CALLS, PROBES, WORKERS } from "./helpers.ts";
@@ -156,5 +159,151 @@ describe("decide: starting the casino", () => {
     const casinoStarts = (s: Snapshot) => starts(s).filter((a) => a.kind === "start" && a.worker === "casino");
     expect(casinoStarts(bn4("Aevum"))).toEqual([startCasino]);
     expect(casinoStarts(bn4("Sector-12"))).toEqual([]);
+  });
+});
+
+/** `run` before sr-01 is bought: the network lists no sr-01. */
+const noHost = (over: Over = {}): Snapshot => {
+  const s = run(over);
+  const { "sr-01": _none, ...freeRamGb } = s.freeRamGb;
+  return { ...s, freeRamGb, probes: { ...s.probes, network: reading({ hosts: ["home", "n00dles", "sr-00"] }) } };
+};
+const buyHost = { kind: "call", script: BUY, arg: { host: "sr-01", ram: 64 } } as const;
+const casinoCalls = (s: Snapshot) => decide(s).filter((a) => a.kind === "call" && a.script === BUY);
+
+describe("decide: the casino's host", () => {
+  test("buys sr-01 at 64 GB once its price ($3.52m) and the stake ($100k) are in hand", () => {
+    expect(casinoCalls(noHost({ money: 3_620_000 }))).toEqual([{ ...buyHost, host: "home" }]);
+    expect(casinoCalls(noHost({ money: 3_619_999 }))).toEqual([]);
+  });
+
+  test("never buys it twice: not once the network lists it, nor right after this conductor bought it", () => {
+    expect(casinoCalls(run({ money: 1e9 }))).toEqual([]);
+    expect(casinoCalls({ ...noHost({ money: 1e9 }), boughtServers: ["sr-01"] })).toEqual([]);
+  });
+
+  test("tries a failed purchase again 10 s later, not before", () => {
+    const failed = (atMs: number) => ({ script: BUY, arg: buyHost.arg, atMs, reply: { ok: false, error: "no money" } }) as const;
+    expect(casinoCalls({ ...noHost({ money: 4e6 }), lastCall: failed(NOW - 9_999) })).toEqual([]);
+    expect(casinoCalls({ ...noHost({ money: 4e6 }), lastCall: failed(NOW - 10_000) })).toEqual([{ ...buyHost, host: "home" }]);
+  });
+
+  test("goes on home once home has 128 GB: no cloud server bought", () => {
+    const roomy = noHost({ homeRam: 128, money: 1e9 });
+    const onHome = { ...roomy, freeRamGb: { ...roomy.freeRamGb, home: 100 } };
+    expect(casinoCalls(onHome)).toEqual([]);
+    expect(starts(onHome)[0]).toEqual({ ...startCasino, host: "home" });
+  });
+
+  test("starts on its own host only, even when home has more room", () => {
+    expect(starts(run({ freeRamGb: { home: 100, "sr-00": 4.75, "sr-01": 54 } }))).toEqual([]);
+  });
+});
+
+describe("decide: the skip rule", () => {
+  // CASINO_TUNABLES.durationS 360 s: $10b / 360 s = $27.78m/s.
+  const earning = (incomePerSec: number) => {
+    const s = run();
+    return { ...s, workers: { ...s.workers, engine: engineAt(incomePerSec) } };
+  };
+
+  test("plays when the engine's income would take longer than the casino to make $10b", () => {
+    expect(starts(earning(27_000_000))).toEqual([startCasino]);
+  });
+
+  test("skips when the engine's income makes $10b in the casino's time or less: no host, no start, no holds", () => {
+    expect(starts(earning(27_800_000))).toEqual([]);
+    expect(casinoCalls({ ...noHost({ money: 1e9 }), workers: earning(27_800_000).workers })).toEqual([]);
+    expect(engineOrders(earning(27_800_000)).hostReserveGb).toEqual({ "sr-00": 27.25 });
+  });
+
+  test("the threshold follows from the casino's duration tunable", () => {
+    expect(casinoSkipThresholdPerSec({ ...CASINO_TUNABLES, durationS: 200 })).toBe(50_000_000);
+    expect(casinoSkipThresholdPerSec()).toBeCloseTo(27_777_778, 0);
+  });
+
+  test("an engine with no outlook yet earns nothing as far as the rule goes", () => {
+    const s = run();
+    expect(starts({ ...s, workers: { ...s.workers, engine: { running: true, failures: 0 } } })).toEqual([startCasino]);
+  });
+});
+
+describe("decide: the money engine around the casino", () => {
+  test("off while the casino runs, back on (all money) once it has capped", () => {
+    expect(engineOrders(withCasino(casinoAt("playing", true)))).toEqual(ORDERS_OFF);
+    const after = engineOrders(withCasino(casinoAt("capped", false)));
+    expect(after.split.money).toBe(1);
+    expect(after.hostReserveGb).toEqual({ "sr-00": 27.25 });
+  });
+
+  test("while it is wanted, the engine leaves the casino's room free on sr-01", () => {
+    expect(engineOrders(run()).hostReserveGb).toEqual({ "sr-00": 27.25, "sr-01": 54.6 });
+    expect(engineOrders(run({ category: "strict" })).hostReserveGb).toEqual({ "sr-00": 27.25 });
+  });
+
+  test("with the casino going on home, the engine's home reserve grows by the casino's RAM", () => {
+    expect(engineOrders(run({ homeRam: 128 })).homeReserveGb).toBeCloseTo(3.85 + 54.6, 9);
+    expect(engineOrders(run({ homeRam: 128 })).hostReserveGb).toEqual({ "sr-00": 27.25 });
+  });
+
+  test("the engine is started again once the casino is done", () => {
+    const capped = withCasino(casinoAt("capped", false));
+    const engineGone = { ...capped, workers: { ...capped.workers, engine: { running: false, failures: 0 } } };
+    expect(starts(engineGone).filter((a) => a.kind === "start" && a.worker === "engine")).toHaveLength(1);
+  });
+});
+
+describe("decide: the run leaves the casino's money alone until it is done", () => {
+  const fleetReading = reading({ readAtMs: NOW, servers: [{ host: "sr-00", ramGb: 32 }, { host: "sr-01", ramGb: 64 }], limit: 25, ramLimitGb: 1_048_576, money: 1e12 });
+  const rich = (over: Over = {}) => {
+    const s = run({ money: 1e12, ...over });
+    return { ...s, probes: { ...s.probes, fleet: fleetReading }, workers: { ...s.workers, engine: engineAt(1e6) } };
+  };
+  const fleetCalls = (s: Snapshot) => decide(s).filter((a) => a.kind === "call" && a.script !== CALLS.root);
+
+  test("the fleet buys nothing while the casino is wanted, and buys again once it is done", () => {
+    expect(fleetCalls(rich())).toEqual([]);
+    const done = rich({ winnings: CASINO_CAP + 1 });
+    expect(fleetCalls(done)).toHaveLength(1);
+  });
+
+  test("wants the player in Aevum while the casino is pending, and nowhere once it is done", () => {
+    expect(wantedCity(run({ city: "Sector-12" }))).toBe("Aevum");
+    expect(wantedCity(run({ city: "Sector-12", winnings: CASINO_CAP + 1 }))).toBeNull();
+    expect(wantedCity(run({ city: "Sector-12", category: "strict" }))).toBeNull();
+  });
+
+  const driverJobs = (s: Snapshot) => decide(s).filter((a) => a.kind === "control" && a.worker === "driver");
+
+  test("the driver travels to Aevum after BruteSSH", () => {
+    const s = run({ city: "Sector-12", money: 1e6 });
+    expect(driverJobs(s)).toEqual([
+      { kind: "control", worker: "driver", message: { seq: 5, job: { kind: "travel", city: "Aevum" } } },
+    ]);
+  });
+
+  test("the driver buys no more port openers until the casino is done", () => {
+    expect(driverJobs(run({ money: 2e6 }))).toEqual([]);
+    expect(driverJobs(run({ money: 2e6, winnings: CASINO_CAP + 1 }))).toEqual([
+      { kind: "control", worker: "driver", message: { seq: 5, job: { kind: "buy", programs: ["FTPCrack.exe"] } } },
+    ]);
+  });
+});
+
+describe("milestone bn1.1:casino", () => {
+  const due = (s: Snapshot) => milestonesReached(MILESTONES, s, ["bn1.1:driver"]);
+
+  test("reached when the casino reports the cap, or the stats probe reads it since the install", () => {
+    expect(due(withCasino(casinoAt("capped", false)))).toEqual(["bn1.1:casino"]);
+    expect(due(run({ winnings: CASINO_CAP + 1 }))).toEqual(["bn1.1:casino"]);
+  });
+
+  test("not while it plays, nor at the cap exactly (the game's own test is strictly over)", () => {
+    expect(due(withCasino(casinoAt("playing", true)))).toEqual([]);
+    expect(due(run({ winnings: CASINO_CAP }))).toEqual([]);
+  });
+
+  test("only in BN1.1", () => {
+    expect(due(run({ winnings: CASINO_CAP + 1, probes: { ...run().probes, route: route(1, { 1: 1 }) } }))).not.toContain("bn1.1:casino");
   });
 });

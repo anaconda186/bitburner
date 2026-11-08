@@ -5,6 +5,7 @@
 // `ns` here. The conductor records what `milestonesReached` returns.
 //
 // RAM: the conductor imports this file, so keep NS function names out of it.
+import { capReached, readCasinoNews } from "./blackjack.ts";
 import type { Snapshot } from "./decide.ts";
 import { BITNODE_ORDER, position, type RouteFacts } from "./order.ts";
 
@@ -55,7 +56,16 @@ export function registry(...groups: readonly (readonly Milestone[])[]): readonly
 export const BN1_1: readonly Milestone[] = [
   // #54: the driver is up on its cloud server and has reported.
   scoped(1, 1, "driver", (s) => s.workers.driver?.running === true && s.workers.driver.report !== undefined),
+  // #56: the casino's first payout, its $10b cap since the install: its own
+  // report says so at once, or after a reload the stats probe's reading.
+  scoped(1, 1, "casino", casinoPaidOut),
 ];
+
+function casinoPaidOut(s: Snapshot): boolean {
+  const news = readCasinoNews(s.workers.casino?.report?.value);
+  const stats = s.probes.stats;
+  return news?.phase === "capped" || (stats?.ok === true && capReached(stats.value.casinoWinnings));
+}
 
 /** Every milestone of the run. Plans add their extras here as they land. */
 export const MILESTONES: readonly Milestone[] = registry(SPINE, BN1_1);
