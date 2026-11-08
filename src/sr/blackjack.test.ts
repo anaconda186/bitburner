@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { cardValue, readCount, shouldHit } from "./blackjack.ts";
+import {
+  betFor, capReached, cardValue, handOutcome, readCasinoArg, readCasinoNews, readCount, shouldHit, type CasinoNews,
+} from "./blackjack.ts";
 
 describe("shouldHit: basic strategy without doubles or splits (the dealer stands on soft 17)", () => {
   test("a hard 11 or less always hits, a hard 17 or more always stands", () => {
@@ -51,5 +53,65 @@ describe("reading the table", () => {
     expect(["A", "K", "Q", "J", "10", "2", "9"].map(cardValue)).toEqual([11, 10, 10, 10, 10, 2, 9]);
     expect(cardValue(" - ")).toBeUndefined();
     expect(cardValue("1")).toBeUndefined();
+  });
+});
+
+describe("the bet and the cap", () => {
+  test("bets everything up to the table's $100m maximum, in whole dollars", () => {
+    expect(betFor(300_000)).toBe(300_000);
+    expect(betFor(98_765_432.9)).toBe(98_765_432);
+    expect(betFor(100e6)).toBe(100e6);
+    expect(betFor(4.2e9)).toBe(100e6);
+  });
+
+  test("has nothing to bet under $1", () => {
+    expect(betFor(0.99)).toBe(0);
+    expect(betFor(0)).toBe(0);
+  });
+
+  test("the cap is reached once net casino winnings since the install pass $10b, as the game counts it", () => {
+    expect(capReached(9.9e9)).toBe(false);
+    expect(capReached(10e9)).toBe(false);
+    expect(capReached(10e9 + 1)).toBe(true);
+  });
+});
+
+describe("handOutcome: how a hand went, from the money before Start and after the hand", () => {
+  test("less money is a loss, the same a push, more a win", () => {
+    expect(handOutcome(300_000, 0)).toBe("lost");
+    expect(handOutcome(300_000, 300_000)).toBe("push");
+    expect(handOutcome(300_000, 600_000)).toBe("won");
+    expect(handOutcome(1e9, 1.15e9)).toBe("won");
+  });
+});
+
+describe("the casino's argument", () => {
+  test("plays in the Open category", () => {
+    expect(readCasinoArg({ category: "open" })).toEqual({ ok: true, category: "open" });
+  });
+
+  test("refuses Strict (no faked clicks, no script reloads) and anything malformed", () => {
+    const strict = readCasinoArg({ category: "strict" });
+    expect(strict.ok).toBe(false);
+    if (!strict.ok) expect(strict.error).toMatch(/Open/);
+    for (const bad of [null, {}, { category: 1 }, "open"]) expect(readCasinoArg(bad).ok).toBe(false);
+  });
+});
+
+describe("readCasinoNews: the casino's report as the conductor reads it", () => {
+  const news: CasinoNews = { host: "sr-01", phase: "playing", hands: 12, winnings: 4.5e8, lastError: null };
+
+  test("reads back what the casino posts, in every phase", () => {
+    expect(readCasinoNews(news)).toEqual(news);
+    for (const phase of ["starting", "playing", "capped", "failed"] as const) {
+      expect(readCasinoNews({ ...news, phase })?.phase).toBe(phase);
+    }
+    expect(readCasinoNews({ ...news, phase: "failed", lastError: "timed out" })?.lastError).toBe("timed out");
+  });
+
+  test("anything malformed (an empty port too) is no news", () => {
+    for (const bad of ["NULL PORT DATA", null, { ...news, phase: "done" }, { ...news, hands: -1 }, { ...news, winnings: "1" }]) {
+      expect(readCasinoNews(bad)).toBeUndefined();
+    }
   });
 });
