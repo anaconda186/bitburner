@@ -10,10 +10,10 @@
 //
 // This file is copied next to a helper launched off home (HELPER_RUNTIME in
 // `../helpers.ts`), so it must import nothing at runtime. RAM: every helper
-// pays for each NS-named identifier in here, so keep it to writePort, atExit,
-// args and tprint, all 0 GB.
+// pays for each NS-named identifier in here, so keep it to writePort,
+// clearPort, atExit, args, pid and tprint, all 0 GB.
 import type { NS, ScriptArg } from "@ns";
-import type { Json, Reply } from "../helper-contract.ts";
+import type { Json, Reply, WorkerReport } from "../helper-contract.ts";
 
 export type DecodedArgs =
   | { readonly ok: true; readonly arg: Json; readonly port: number }
@@ -41,6 +41,16 @@ export async function settle(call: () => Json | void | Promise<Json | void>): Pr
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/**
+ * A long-lived worker's news: replaces whatever is on its status port with a
+ * WorkerReport, so the port always holds exactly the latest one.
+ */
+export function postReport(ns: NS, port: number, value: Json): void {
+  const report: WorkerReport = { pid: ns.pid, atMs: Date.now(), value };
+  ns.clearPort(port);
+  ns.writePort(port, report);
 }
 
 /** The whole life of a helper: decode, call once, reply once, exit. */

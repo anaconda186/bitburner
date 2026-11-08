@@ -71,4 +71,15 @@ export const RAM_BUDGETS: BudgetTable = {
   // #49: the sleeves probe (sleeve count). Base 1.6, sleeve.getNumSleeves 4.
   // Launched only in BN10 or with SF10, but priced the same everywhere.
   "sr/h/sleeves.js": { budget: 5.6, contexts: EVERYWHERE },
+  // #72: the market probe. Base 1.6, stock.hasTixApiAccess 0.05: 1.65, a
+  // hair over in the calculator's float sum (as is the trader's), hence 1.7.
+  "sr/h/market.js": { budget: 1.7, contexts: EVERYWHERE },
+  // #72: the BN8 trader worker. Base 1.6; getSymbols, getAskPrice,
+  // getBidPrice, getPosition, getMaxShares 2 each; buyStock, sellStock,
+  // buyShort, sellShort, getForecast, getVolatility 2.5 each;
+  // getServerMoneyAvailable 0.1, has4SDataTixApi 0.05; nextUpdate 0. That is
+  // 26.75, which the calculator's float sum puts a hair over, hence 26.8.
+  // Only BN8 starts it, which the gate's presets price like any BitNode
+  // after the BN4 front (no Singularity here, so the context changes nothing).
+  "sr/h/trader.js": { budget: 26.8, contexts: ["SF4.3"] },
 };

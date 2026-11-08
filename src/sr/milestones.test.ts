@@ -14,6 +14,7 @@ function snap(route: RouteFacts | null, over: Partial<Snapshot> = {}): Snapshot 
     probes: route === null ? {} : { route: { ok: true, value: { ...route, lastAugReset: T0, lastNodeReset: T0 }, atMs: T0 } },
     probesInFlight: [],
     callRunning: false,
+    workers: {},
     ...over,
   };
 }
