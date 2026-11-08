@@ -68,7 +68,7 @@ describe("the finish line", () => {
 
 describe("a split's stats come from the probes", () => {
   const snap = (probes: Snapshot["probes"]): Snapshot => ({
-    nowMs: T0, freeRamGb: { home: 4 }, helperRamGb: {}, probes, probesInFlight: [], callRunning: false,
+    nowMs: T0, freeRamGb: { home: 4 }, helperRamGb: {}, probes, probesInFlight: [], callRunning: false, workers: {},
   });
   const route = (currentNode: number, ownedSF: Record<number, number> = {}) =>
     ({ ok: true, value: { currentNode, ownedSF, lastAugReset: T0, lastNodeReset: T0 }, atMs: T0 }) as const;

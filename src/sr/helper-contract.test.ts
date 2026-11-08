@@ -1,6 +1,18 @@
 import { describe, expect, test } from "vitest";
-import { readReply } from "./helper-contract.ts";
+import { readReply, readWorkerReport } from "./helper-contract.ts";
 import { decodeHelperArgs, settle } from "./h/serve.ts";
+
+describe("readWorkerReport: what the conductor accepts off a worker's status port", () => {
+  test("passes a report with the worker's pid, time and news", () => {
+    expect(readWorkerReport({ pid: 12, atMs: 5, value: { ticks: 3 } })).toEqual({ pid: 12, atMs: 5, value: { ticks: 3 } });
+  });
+
+  test("treats an empty port or anything malformed as no report", () => {
+    for (const raw of ["NULL PORT DATA", null, 7, { pid: 0, atMs: 1, value: null }, { pid: 3, value: 1 }, { pid: 3, atMs: 1 }]) {
+      expect(readWorkerReport(raw)).toBeUndefined();
+    }
+  });
+});
 
 describe("readReply: what the conductor accepts off a reply port", () => {
   test("passes a success with its value and a failure with its error", () => {

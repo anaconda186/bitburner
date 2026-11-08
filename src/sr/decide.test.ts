@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { decide, place, type Snapshot } from "./decide.ts";
-import { PROBES, type HelperScript } from "./helpers.ts";
+import { PROBES, WORKERS, type HelperScript } from "./helpers.ts";
 
 const NETWORK = PROBES.network.script;
 
@@ -13,6 +13,7 @@ function snap(over: Partial<Snapshot> = {}): Snapshot {
     probes: {},
     probesInFlight: [],
     callRunning: false,
+    workers: {},
     ...over,
   };
 }
@@ -128,5 +129,60 @@ describe("place: the RAM ledger and action helpers", () => {
     expect(place(s, [buy, { kind: "probe", name: "network" }])).toEqual([
       { kind: "probe", name: "network", host: "home" },
     ]);
+  });
+});
+
+describe("decide: the BN8 trader", () => {
+  const TRADER = WORKERS.trader.script;
+  const MARKET = PROBES.market.script;
+  const ROUTE = PROBES.route.script;
+  const NOW = 1_700_000_000_000;
+  const market = (hasTixApi: boolean) => ({ ok: true, value: { hasTixApi }, atMs: NOW }) as const;
+  const route = (currentNode: number) => ({ ok: true, value: { currentNode, ownedSF: { 1: 3, 4: 3 }, lastAugReset: NOW, lastNodeReset: NOW }, atMs: NOW }) as const;
+  const network = { ok: true, value: { hosts: ["home"] }, atMs: NOW } as const;
+  /** BN8 with TIX access, every probe fresh, room for the trader on home. */
+  const bn8 = (over: Partial<Snapshot> = {}) =>
+    snap({
+      freeRamGb: { home: 64 },
+      helperRamGb: { [NETWORK]: 1.8, [ROUTE]: 2.6, [MARKET]: 1.65, [TRADER]: 26.75 },
+      probes: { network, route: route(8), market: market(true) },
+      ...over,
+    });
+  const start = { kind: "start", worker: "trader", arg: null, host: "home" } as const;
+
+  test("starts the trader in BN8 once TIX access is there", () => {
+    expect(decide(bn8())).toEqual([start]);
+  });
+
+  test("starts no trader outside BN8, without TIX access, or before both are read", () => {
+    expect(decide(bn8({ probes: { network, route: route(1), market: market(true) } }))).toEqual([]);
+    expect(decide(bn8({ probes: { network, route: route(8), market: market(false) } }))).toEqual([]);
+    expect(decide(bn8({ probes: { network, route: route(8) }, probesInFlight: ["market"] }))).toEqual([]);
+    expect(decide(bn8({ probes: { network, market: market(true) }, probesInFlight: ["route"] }))).toEqual([]);
+    const failed = { ok: false, error: "boom", atMs: NOW } as const;
+    expect(decide(bn8({ probes: { network, route: route(8), market: failed } }))).toEqual([]);
+  });
+
+  test("leaves a running trader alone, also one this conductor didn't start", () => {
+    expect(decide(bn8({ workers: { trader: { running: true, failures: 0 } } }))).toEqual([]);
+  });
+
+  test("starts it again after a reload: the new conductor has no record of it", () => {
+    expect(decide(bn8({ workers: {} }))).toEqual([start]);
+  });
+
+  test("relaunches a trader that died after the backoff: 4 s after its third failure in a row", () => {
+    const died = (atMs: number) => ({ trader: { running: false, failures: 3, lastFailAtMs: atMs } });
+    expect(decide(bn8({ workers: died(NOW - 3_999) }))).toEqual([]);
+    expect(decide(bn8({ workers: died(NOW - 4_000) }))).toEqual([start]);
+  });
+
+  test("puts the trader where it fits, after the probes, and drops it when it fits nowhere", () => {
+    const probes = { network: { ...network, atMs: NOW - 60_000 }, route: route(8), market: market(true) };
+    expect(decide(bn8({ probes, freeRamGb: { home: 20, "big-1": 32 } }))).toEqual([
+      { kind: "probe", name: "network", host: "home" },
+      { ...start, host: "big-1" },
+    ]);
+    expect(decide(bn8({ freeRamGb: { home: 20, "n00dles": 4 } }))).toEqual([]);
   });
 });

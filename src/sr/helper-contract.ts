@@ -36,3 +36,18 @@ export function readReply(raw: unknown): Reply {
   }
   return { ok: false, error: `malformed reply: ${String(JSON.stringify(raw)).slice(0, 200)}` };
 }
+
+/**
+ * What a long-lived worker keeps on its status port: one entry, replaced as
+ * it works. `pid` lets a conductor that didn't start the worker (one started
+ * again by boot) find it alive; `value` is the worker's own news.
+ */
+export type WorkerReport = { readonly pid: number; readonly atMs: number; readonly value: Json };
+
+/** Checks what is on a status port; anything else (an empty port's "NULL PORT DATA") is no report. */
+export function readWorkerReport(raw: unknown): WorkerReport | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as { pid?: unknown; atMs?: unknown; value?: unknown };
+  if (typeof r.pid !== "number" || !(r.pid > 0) || typeof r.atMs !== "number" || !("value" in r)) return undefined;
+  return { pid: r.pid, atMs: r.atMs, value: r.value as Json };
+}

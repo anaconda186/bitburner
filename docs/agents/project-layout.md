@@ -89,6 +89,23 @@ The conventions every ticket of the speedrun spec (#41) builds on. Set by #42.
 - **A failed launch** (scp, exec or a throw) is "not done". It is never fatal, and `decide` wants it again next loop.
 - **Conductor RAM:** 3.85 GB of its 4 GB budget. `tools/ram-budget.test.ts` keeps boot's and the conductor's budgets at 8 GB or less in total. Every identifier reachable from the conductor (`decide.ts` and its imports included) that is named like an NS function is charged; `probe` is one of them (`dnet.probe`).
 
+## Long-lived workers (set by #72)
+
+- **A worker** is a helper-shaped script that keeps running: the BN8 trader now, the money engine and the driver later. It lives in `src/sr/h/` and is registered in `WORKERS` in `src/sr/helpers.ts` as `{ script, port, files }`. `port` is its fixed status port, below `REPLY_PORT_BASE` (the trader has port 1). `files` lists every library it imports beyond the helper runtime; they are copied with it when it runs off home, and `src/sr/helpers.test.ts` checks the list against its imports.
+- **Launch:** like a helper (`exec`, 1 thread, temporary), with args `[argJson, statusPort]`. The conductor clears the port first.
+- **Reports:** the worker keeps one `WorkerReport` (`{ pid, atMs, value }`, `helper-contract.ts`) on its status port, replaced with `postReport` from `h/serve.ts` as it works. Its `value` is the worker's own news (the trader's is `TraderNews`: ticks, oracle, cash, net worth, positions, orders, closes).
+- **Liveness:** each loop the conductor peeks the port and checks `isRunning` on the pid it launched and the pid in the report. So a conductor started again by boot adopts a live worker instead of starting a second one. After a reload the port is empty and nothing runs, so the worker is started again.
+- **Restart rule (pure):** `src/sr/workers.ts` keeps a record per worker (`afterLaunch`, `observeWorker`). A failed launch, or a worker that dies within `HEALTHY_MS` (60 s), adds a failure; one that ran that long is forgiven. `decide` wants `{ kind: "start", worker, arg }` when the worker is wanted, isn't running, and `backoffMs(failures)` has passed since the last failure. `place` puts it like a probe.
+- **No stop yet.** Killing a worker from the conductor would cost `kill` (0.5 GB), which it can't afford. A later ticket that needs a stop should send it over the port or through an action helper.
+
+## The BN8 trader (seam C, set by #72)
+
+- **`src/sr/trades.ts`** is pure. `decideTrades(snapshot) → Order[]`, where the snapshot is `{ cash, oracle, stocks: StockView[] }` and an order is `{ kind: "buyLong" | "sellLong" | "buyShort" | "sellShort", sym, shares }`. Sells come first, then buys. It also exports `tickEdge`, `netWorth`, `appendPrice` and `TRADER_TUNABLES` (trend window 45 ticks, horizon 100, trend z 1, hold fraction 0.5, commission $100k).
+- **Edge:** `(2·forecast − 1) · volatility / 2` per tick. The oracle trader reads both from the 4S TIX API. The price-only trader uses the share of up-ticks over the last 45 moves (zero unless more than one standard error from even) and the mean absolute log move. Stocks rank by `|edge| · 100 − 2 · spread`, and each buy must earn more than its commissions (two for a new position, one for a top-up). A position is sold when its edge flips or falls to half the entry threshold. An unknown edge (fewer than 45 moves seen) holds what is held and buys nothing.
+- **`src/sr/h/trader.ts`** is the thin shell, 26.75 GB. It loops on `stock.nextUpdate()`, reads every stock, places the orders at market and reports. It turns oracle whenever `has4SDataTixApi()` is true. A tick that throws is printed and retried after 6 s.
+- **When it runs:** `traderWanted(snapshot)` in `decide.ts`: the `route` probe says BN8 and the `market` probe (`sr/h/market.js`, 1.65 GB: `hasTixApi`) says TIX. The BN8 session plan (#73, #74) narrows this. It will also need a cash reserve and a stop, which this ticket doesn't build.
+- **Model cases:** `docs/research/bn8-stocks-model/golden.py` exports `golden.json` from the model's own traders. `src/sr/trades.model.test.ts` checks edge directions, closes and entry sides against them.
+
 ## BitNode order and milestones (set by #48)
 
 - **The order** is one table, `BITNODE_ORDER` in `src/sr/order.ts`: 45 `{ bn, level, finish }` entries, `finish` being `"hacking"` or `"blackops"`. Change the order only there.
