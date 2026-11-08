@@ -90,18 +90,39 @@ function ramOf(jobs: readonly Job[]): number {
   return jobs.reduce((gb, j) => gb + j.threads * JOB_RAM_GB[j.script], 0);
 }
 
+/** Free RAM on a host right now. */
+const freeNowGb = (h: HostView): number => Math.max(0, h.maxRamGb - h.usedRamGb);
+
+/**
+ * The engine should start again on home (spec #41 user story 64: it starts on
+ * the first rooted 16 GB server and moves to home once home has room): it
+ * runs elsewhere, and home has room for it now beside the reserve.
+ */
+export function moveHome(s: EngineSnapshot, orders: EngineOrders): boolean {
+  const home = s.hosts.find((h) => h.host === "home");
+  if (s.engineHost === "home" || home === undefined) return false;
+  return freeNowGb(home) + RAM_EPSILON >= s.engineRamGb + orders.homeReserveGb;
+}
+
 /**
  * RAM each host has free for new jobs now, and the engine's whole pool: what
  * it would have if its own jobs in flight were done. The split is a share of
- * that pool.
+ * that pool. Home keeps the reserve free, and also the engine's own room while
+ * the engine runs elsewhere and its jobs are what keep it from moving there.
  */
-function ramLedger(s: EngineSnapshot): { free: Map<string, number>; poolGb: number } {
+function ramLedger(s: EngineSnapshot, orders: EngineOrders): { free: Map<string, number>; poolGb: number } {
   const free = new Map<string, number>();
   let poolGb = 0;
   for (const h of s.hosts) {
-    const freeNow = Math.max(0, h.maxRamGb - h.usedRamGb);
-    free.set(h.host, freeNow);
-    poolGb += freeNow + ramOf(s.inFlight.filter((j) => j.host === h.host));
+    const ownGb = ramOf(s.inFlight.filter((j) => j.host === h.host));
+    let reserveGb = 0;
+    if (h.host === "home") {
+      reserveGb = orders.homeReserveGb;
+      const roomOnceLanded = freeNowGb(h) + ownGb - reserveGb;
+      if (s.engineHost !== "home" && roomOnceLanded + RAM_EPSILON >= s.engineRamGb) reserveGb += s.engineRamGb;
+    }
+    free.set(h.host, Math.max(0, freeNowGb(h) - reserveGb));
+    poolGb += Math.max(0, freeNowGb(h) + ownGb - reserveGb);
   }
   return { free, poolGb };
 }
@@ -136,7 +157,7 @@ function project(t: TargetView, inFlight: readonly Job[]): Projection {
  */
 function drain(s: EngineSnapshot, orders: EngineOrders): Job[] {
   const perThread = JOB_RAM_GB[HACK_JOB];
-  const { free, poolGb } = ramLedger(s);
+  const { free, poolGb } = ramLedger(s, orders);
   let budgetGb = orders.split.money * poolGb - ramOf(s.inFlight);
   const plans = s.targets.map((t) => project(t, s.inFlight));
   const atLanding = (p: Projection): HackTarget => ({ ...p.now, hackDifficulty: p.security });

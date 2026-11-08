@@ -4,7 +4,7 @@
 // threads to steal a fraction f are f / per-thread fraction).
 import { describe, expect, test } from "vitest";
 import { NEUTRAL_MULTS, type Hacker } from "./formulas.ts";
-import { HACK_JOB, JOB_RAM_GB, schedule, SPLIT_MONEY, SPLIT_OFF, type Job, type EngineOrders, type EngineSnapshot, type TargetView } from "./money-engine.ts";
+import { HACK_JOB, JOB_RAM_GB, moveHome, schedule, SPLIT_MONEY, SPLIT_OFF, type Job, type EngineOrders, type EngineSnapshot, type TargetView } from "./money-engine.ts";
 
 const NOW = 1_700_000_000_000;
 const player = (hacking: number): Hacker => ({
@@ -117,5 +117,117 @@ describe("drain targets", () => {
     const jobs = schedule(s, ORDERS);
     expect(jobs.map((j) => [j.host, j.threads])).toEqual([["b", 6], ["a", 5]]);
     expect(jobs.every((j) => j.target === "foodnstuff")).toBe(true);
+  });
+});
+
+describe("jobs in flight", () => {
+  const onTheWay = (target: string, threads: number, steal: number, securityRise: number): Job => ({
+    script: HACK_JOB, host: "big", target, threads, additionalMsec: 0, landsAtMs: NOW + 1_000, steal, securityRise,
+  });
+
+  test("a target whose money a hack in flight will take gets nothing more", () => {
+    expect(schedule(snap({ inFlight: [onTheWay("foodnstuff", 267, 1, 0.534)] }), ORDERS)).toEqual([]);
+  });
+
+  test("a target a hack in flight takes part of gets the threads for the rest, at the security it will have", () => {
+    // In flight: security 10 + 9 = 19 when the next one lands. One thread then
+    // steals 0.81 · 1 / 240 = 0.003375, so 1/0.003375 = 296.3 → 297 threads,
+    // each taking 0.003375 of the money left. The time stays 17.5 s: it is
+    // fixed at launch, by today's security.
+    const jobs = schedule(snap({ inFlight: [onTheWay("foodnstuff", 100, 0.375, 9)] }), ORDERS);
+    expect(jobs).toMatchObject([{ target: "foodnstuff", threads: 297, landsAtMs: NOW + 17_500 }]);
+    expect(jobs[0]?.securityRise).toBeCloseTo(0.594, 12);
+  });
+
+  test("a job's expected steal and security rise are those of the formulas", () => {
+    // 10 threads of 0.00375 steal 0.0375 and add 0.02 security.
+    const [job] = schedule(snap({ hosts: [{ host: "big", maxRamGb: 17, usedRamGb: 0 }] }), ORDERS);
+    expect(job?.steal).toBeCloseTo(0.0375, 12);
+    expect(job?.securityRise).toBeCloseTo(0.02, 12);
+  });
+});
+
+describe("never over the RAM it is given", () => {
+  test("over many random snapshots, jobs fit each host and the money share, and hit only targets with money", () => {
+    let seed = 53;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    for (let i = 0; i < 500; i++) {
+      const hosts = Array.from({ length: 1 + Math.floor(rand() * 6) }, (_, n) => {
+        const maxRamGb = 2 ** Math.floor(rand() * 8);
+        return { host: `h${n}`, maxRamGb, usedRamGb: Math.round(rand() * maxRamGb * 100) / 100 };
+      });
+      const targets = Array.from({ length: Math.floor(rand() * 5) }, (_, n) =>
+        target(`t${n}`, {
+          moneyAvailable: rand() < 0.2 ? 0 : rand() * 1e7,
+          hackDifficulty: 1 + rand() * 99,
+          requiredHackingSkill: 1 + Math.floor(rand() * 200),
+        }),
+      );
+      const money = Math.round(rand() * 10) / 10;
+      const s = snap({ hosts, targets, player: player(1 + Math.floor(rand() * 300)) });
+      const jobs = schedule(s, { split: { money, exp: 1 - money, share: 0 }, homeReserveGb: 0 });
+      const pool = hosts.reduce((gb, h) => gb + h.maxRamGb - h.usedRamGb, 0);
+      expect(ramOf(jobs)).toBeLessThanOrEqual(money * pool + 1e-6);
+      for (const h of hosts) {
+        expect(ramOf(jobs.filter((j) => j.host === h.host))).toBeLessThanOrEqual(h.maxRamGb - h.usedRamGb + 1e-6);
+      }
+      const rich = new Set(targets.filter((t) => t.moneyAvailable >= 1 && t.requiredHackingSkill <= s.player.skills.hacking).map((t) => t.host));
+      for (const j of jobs) {
+        expect(rich.has(j.target)).toBe(true);
+        expect(j.threads).toBeGreaterThanOrEqual(1);
+        expect(Number.isInteger(j.threads)).toBe(true);
+      }
+    }
+  });
+});
+
+describe("home", () => {
+  // The engine (4.65 GB) on foodnstuff, the conductor (3.85 GB) on home.
+  const ENGINE_GB = 4.65;
+  const withHome = (maxRamGb: number, usedRamGb: number, inFlight: Job[] = []) =>
+    snap({
+      engineHost: "foodnstuff",
+      engineRamGb: ENGINE_GB,
+      hosts: [
+        { host: "home", maxRamGb, usedRamGb },
+        { host: "foodnstuff", maxRamGb: 16, usedRamGb: ENGINE_GB },
+      ],
+      inFlight,
+    });
+  const reserve = (homeReserveGb: number): EngineOrders => ({ split: SPLIT_MONEY, homeReserveGb });
+  const onHome = (jobs: readonly Job[]) => jobs.filter((j) => j.host === "home").reduce((n, j) => n + j.threads, 0);
+
+  test("keeps the reserve free on home for probes and action helpers", () => {
+    // 64 − 3.85 − 2.6 = 57.55 GB: 33 threads. Without the reserve, 35.
+    const s = snap({ hosts: [{ host: "home", maxRamGb: 64, usedRamGb: 3.85 }] });
+    expect(onHome(schedule(s, reserve(2.6)))).toBe(33);
+    expect(onHome(schedule(s, reserve(0)))).toBe(35);
+  });
+
+  test("an 8 GB home has no room for the engine, so it stays where it is", () => {
+    expect(moveHome(withHome(8, 3.85), reserve(2.6))).toBe(false);
+  });
+
+  test("moves to home once home has room for it beside the reserve", () => {
+    // 32 − 3.85 = 28.15 GB free, at least 4.65 + 2.6.
+    expect(moveHome(withHome(32, 3.85), reserve(2.6))).toBe(true);
+    expect(moveHome(withHome(32, 3.85 + 21.1), reserve(2.6))).toBe(false); // 7.05 GB free
+    expect(moveHome({ ...withHome(32, 3.85), engineHost: "home" }, reserve(2.6))).toBe(false);
+  });
+
+  test("holds the engine's room on home while its own jobs fill it, so it can move once they land", () => {
+    // Home 20 GB: conductor 3.85 plus 6 hack threads in flight (10.2 GB),
+    // 5.95 GB free now. Once they land there is room for the engine, so the
+    // 3.35 GB above the reserve stays free (else 1 more thread would go there).
+    const held = Array.from({ length: 1 }, (): Job => ({
+      script: HACK_JOB, host: "home", target: "n00dles", threads: 6, additionalMsec: 0,
+      landsAtMs: NOW + 1_000, steal: 0.02, securityRise: 0.012,
+    }));
+    const s = withHome(20, 3.85 + 10.2, held);
+    expect(moveHome(s, reserve(2.6))).toBe(false);
+    expect(onHome(schedule(s, reserve(2.6)))).toBe(0);
+    // A home that won't have room even then is used as usual.
+    const small = { ...s, hosts: [{ host: "home", maxRamGb: 8, usedRamGb: 3.85 }, ...s.hosts.slice(1)], inFlight: [] };
+    expect(onHome(schedule(small, reserve(0)))).toBe(2);
   });
 });
