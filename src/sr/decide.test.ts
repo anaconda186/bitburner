@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { decide, place, type Snapshot } from "./decide.ts";
 import { CALLS, PROBES, WORKERS, type HelperScript } from "./helpers.ts";
+import { NEUTRAL_MULTS } from "./formulas.ts";
 import { ORDERS_OFF, SPLIT_MONEY, type EngineOrders } from "./money-engine.ts";
 
 const NETWORK = PROBES.network.script;
@@ -251,7 +252,7 @@ describe("decide: the money engine", () => {
     });
   // The reserve is the dearest probe or action helper that may run: the route
   // probe's 2.6 GB (the sleeves probe only runs in BN10 or with SF10).
-  const MONEY = { split: SPLIT_MONEY, homeReserveGb: 2.6 };
+  const MONEY = { split: SPLIT_MONEY, homeReserveGb: 2.6, mults: NEUTRAL_MULTS };
   const control = (message: EngineOrders) => ({ kind: "control", worker: "engine", message }) as const;
   const start = (host: string) => ({ kind: "start", worker: "engine", arg: { control: WORKERS.engine.control }, host }) as const;
   const running = { engine: { running: true, failures: 0 } };
@@ -264,7 +265,7 @@ describe("decide: the money engine", () => {
   test("writes the orders only when the port doesn't hold them already", () => {
     expect(decide(bn1({ controls: { engine: MONEY } }))).toEqual([start("foodnstuff")]);
     expect(decide(bn1({ controls: { engine: MONEY }, workers: running }))).toEqual([]);
-    const stale = { split: SPLIT_MONEY, homeReserveGb: 1.8 };
+    const stale = { split: SPLIT_MONEY, homeReserveGb: 1.8, mults: NEUTRAL_MULTS };
     expect(decide(bn1({ controls: { engine: stale }, workers: running }))).toEqual([control(MONEY)]);
   });
 
@@ -302,7 +303,49 @@ describe("decide: the money engine", () => {
 
   test("counts the sleeves probe in the reserve where it runs", () => {
     const bn10 = { ...bn1().probes, route: route(10), sleeves: reading({ count: 1 }) };
-    const orders = { split: SPLIT_MONEY, homeReserveGb: 5.6 };
+    const orders = { split: SPLIT_MONEY, homeReserveGb: 5.6, mults: NEUTRAL_MULTS };
     expect(decide(bn1({ probes: bn10, controls: { engine: orders }, workers: running }))).toEqual([]);
+  });
+});
+
+describe("decide: the BitNode multipliers the engine is given", () => {
+  const NOW = 1_700_000_000_000;
+  const BITNODE = PROBES.bitnode.script;
+  const reading = <T,>(value: T) => ({ ok: true, value, atMs: NOW }) as const;
+  const route = (currentNode: number, ownedSF: Record<number, number> = {}) =>
+    reading({ currentNode, ownedSF, lastAugReset: NOW, lastNodeReset: NOW });
+  const at = (probes: Snapshot["probes"]) =>
+    snap({ nowMs: NOW, freeRamGb: { home: 64 }, helperRamGb: { [BITNODE]: 5.6, [WORKERS.engine.script]: 4.65 }, probes });
+  const multsSent = (s: Snapshot) => {
+    const control = decide(s).find((a) => a.kind === "control");
+    return control?.kind === "control" ? (control.message as EngineOrders).mults : undefined;
+  };
+  const bitnodeWanted = (s: Snapshot) => decide(s).some((a) => a.kind === "probe" && a.name === "bitnode");
+
+  test("BN1 without SF5: all 1, and no probe (getBitNodeMultipliers would throw)", () => {
+    expect(multsSent(at({ route: route(1) }))).toEqual(NEUTRAL_MULTS);
+    expect(bitnodeWanted(at({ route: route(1) }))).toBe(false);
+  });
+
+  test("BN4 without SF5: the parameter table (steal ×0.2, exp ×0.4, cloud softcap 1.2)", () => {
+    expect(multsSent(at({ route: route(4, { 1: 1 }) }))).toEqual({
+      ...NEUTRAL_MULTS, ScriptHackMoney: 0.2, HackExpGain: 0.4, CloudServerSoftcap: 1.2,
+    });
+  });
+
+  test("with SF5, or in BN5, the probe reads them once, and its reading is what the engine gets", () => {
+    expect(bitnodeWanted(at({ route: route(12, { 5: 1 }) }))).toBe(true);
+    expect(bitnodeWanted(at({ route: route(5) }))).toBe(true);
+    const bn12 = { ...NEUTRAL_MULTS, ScriptHackMoney: 0.55, CloudServerMaxRam: 0.5 };
+    const read = at({ route: route(12, { 5: 1 }), bitnode: reading(bn12) });
+    expect(multsSent(read)).toEqual(bn12);
+    expect(bitnodeWanted({ ...read, nowMs: NOW + 3_600_000 })).toBe(false);
+  });
+
+  test("a failed reading is tried again and, meanwhile, BN1's values stand in", () => {
+    const failed = { ok: false, error: "Requires Source-File 5 to run.", atMs: NOW } as const;
+    const s = at({ route: route(12, { 5: 1 }), bitnode: failed });
+    expect(multsSent(s)).toEqual(NEUTRAL_MULTS);
+    expect(bitnodeWanted({ ...s, nowMs: NOW + 60_000 })).toBe(true);
   });
 });

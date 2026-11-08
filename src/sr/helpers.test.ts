@@ -17,12 +17,24 @@ describe("helper registry", () => {
   });
 
   test("each worker lists every file it imports outside the helper runtime, so off home it has them", () => {
-    for (const w of Object.values(WORKERS)) {
-      const source = readFileSync(dir + w.script.replace(/^sr\/h\//, "").replace(/\.js$/, ".ts"), "utf8");
-      const imports = [...source.matchAll(/^import (?!type )[^"]*"(\.\.?\/[^"]+)\.ts";/gm)].map((m) =>
-        posix.join("sr/h", m[1] as string) + ".js",
+    // Its imports' imports too: off home, every file the game loads must be there.
+    const srcRoot = fileURLToPath(new URL("../", import.meta.url));
+    const importsOf = (home: string): string[] => {
+      const source = readFileSync(srcRoot + home.replace(/\.js$/, ".ts"), "utf8");
+      return [...source.matchAll(/^import (?!type )[^"]*"(\.\.?\/[^"]+)\.ts";/gm)].map(
+        (m) => posix.join(posix.dirname(home), m[1] as string) + ".js",
       );
-      expect(imports.filter((f) => !HELPER_RUNTIME.includes(f as never)).sort()).toEqual([...w.files].sort());
+    };
+    for (const w of Object.values(WORKERS)) {
+      const seen = new Set<string>();
+      const todo = importsOf(w.script);
+      while (todo.length > 0) {
+        const f = todo.pop() as string;
+        if (seen.has(f)) continue;
+        seen.add(f);
+        todo.push(...importsOf(f));
+      }
+      expect([...seen].filter((f) => !HELPER_RUNTIME.includes(f as never)).sort()).toEqual([...w.files].sort());
     }
   });
 

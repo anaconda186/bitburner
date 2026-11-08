@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { decide, engineOrders, type Snapshot } from "./decide.ts";
 import type { DriverNews } from "./driver-jobs.ts";
 import { CALLS, PROBES, WORKERS } from "./helpers.ts";
+import { NEUTRAL_MULTS } from "./formulas.ts";
 import { SPLIT_MONEY } from "./money-engine.ts";
 
 const NOW = 1_700_000_000_000;
@@ -124,10 +125,13 @@ describe("decide: starting the driver", () => {
   });
 
   test("keeps the money engine off the driver's room on sr-00 in BN1.1", () => {
-    expect(engineOrders(withHost())).toEqual({ split: SPLIT_MONEY, homeReserveGb: 3.85, hostReserveGb: { "sr-00": 27.25 } });
+    expect(engineOrders(withHost())).toEqual({
+      split: SPLIT_MONEY, homeReserveGb: 3.85, hostReserveGb: { "sr-00": 27.25 }, mults: NEUTRAL_MULTS,
+    });
     expect(engineOrders(withHost({ probes: { ...withHost().probes, route: route(1, { 1: 1 }) } }))).toEqual({
       split: SPLIT_MONEY,
       homeReserveGb: 3.85,
+      mults: NEUTRAL_MULTS,
     });
   });
 });

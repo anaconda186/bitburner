@@ -24,6 +24,7 @@ import {
   hackFraction,
   hackingLevel,
   hackSecurityRise,
+  growSecurityRise,
   hackTimeMs,
   NEUTRAL_MULTS,
   skillFromExp,
@@ -236,6 +237,17 @@ describe("security a hack adds (hand-worked)", () => {
 
   it("counts every thread when the fraction is 0 (the game's cap is then Infinity)", () => {
     expect(hackSecurityRise(500, 0)).toBeCloseTo(1, 12);
+  });
+});
+
+// Security a grow adds (#57). Hand-worked from the game's rule (twice a
+// hack's 0.002 per thread actually used, src/Server/ServerHelpers.ts:202-211):
+// the money engine plans for every thread being used, the worst case.
+describe("security a grow adds (hand-worked)", () => {
+  it("is 0.004 per thread", () => {
+    expect(growSecurityRise(1)).toBeCloseTo(0.004, 15);
+    expect(growSecurityRise(250)).toBeCloseTo(1, 12);
+    expect(growSecurityRise(0)).toBe(0);
   });
 });
 

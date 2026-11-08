@@ -21,15 +21,17 @@
 // but `./serve.ts`, `../money-engine.ts` and `../formulas.ts` (copied with it
 // off home: WORKERS.files). RAM: see tools/ram-budget.ts.
 import type { NS } from "@ns";
-import { NEUTRAL_MULTS } from "../formulas.ts";
 import {
   GROW_JOB,
   HACK_JOB,
   moveHome,
+  outlook,
   readOrders,
   schedule,
   stillInFlight,
   WEAKEN_JOB,
+  type EngineOrders,
+  type EngineOutlook,
   type EngineSnapshot,
   type HostView,
   type Job,
@@ -49,6 +51,8 @@ export type EngineNews = {
   readonly launched: number;
   readonly refused: number;
   readonly lastError: string | null;
+  /** What its RAM is expected to earn, for the fleet rule (#57); null with nothing to batch. */
+  readonly outlook: EngineOutlook | null;
 };
 
 const TICK_MS = 500;
@@ -67,20 +71,23 @@ function allHosts(ns: NS): string[] {
   return seen;
 }
 
-function readWorld(ns: NS, nowMs: number, inFlight: readonly Job[]): EngineSnapshot {
+function readWorld(ns: NS, nowMs: number, inFlight: readonly Job[], orders: EngineOrders): EngineSnapshot {
   const hosts: HostView[] = [];
   const targets: TargetView[] = [];
   for (const host of allHosts(ns)) {
     if (!ns.hasRootAccess(host)) continue;
     hosts.push({ host, maxRamGb: ns.getServerMaxRam(host), usedRamGb: ns.getServerUsedRam(host) });
     if (host === "home") continue;
-    const moneyAvailable = ns.getServerMoneyAvailable(host);
-    if (!(moneyAvailable > 0)) continue;
+    const moneyMax = ns.getServerMaxMoney(host);
+    if (!(moneyMax > 0)) continue;
     targets.push({
       host,
       hasAdminRights: true,
-      moneyAvailable,
+      moneyAvailable: ns.getServerMoneyAvailable(host),
+      moneyMax,
       hackDifficulty: ns.getServerSecurityLevel(host),
+      minDifficulty: ns.getServerMinSecurityLevel(host),
+      serverGrowth: ns.getServerGrowth(host),
       requiredHackingSkill: ns.getServerRequiredHackingLevel(host),
     });
   }
@@ -93,9 +100,9 @@ function readWorld(ns: NS, nowMs: number, inFlight: readonly Job[]): EngineSnaps
     hosts,
     targets,
     player: { skills: { hacking: p.skills.hacking, intelligence: p.skills.intelligence }, mults: p.mults },
-    // BitNode multipliers need SF5 (or 4 GB) to read; drain assumes BN1's.
-    // A wrong ScriptHackMoney only changes how many threads a target takes.
-    mults: NEUTRAL_MULTS,
+    // BitNode multipliers need SF5 and 4 GB to read: the conductor sends them
+    // with the orders (its bitnode probe, or its table before SF5).
+    mults: orders.mults,
     inFlight,
   };
 }
@@ -129,6 +136,7 @@ export async function main(ns: NS): Promise<void> {
     launched: 0,
     refused: 0,
     lastError: null,
+    outlook: null,
   };
   postReport(ns, port, news);
   let failures = 0;
@@ -137,7 +145,7 @@ export async function main(ns: NS): Promise<void> {
       const nowMs = Date.now();
       inFlight = stillInFlight(inFlight, nowMs);
       const orders = readOrders(ns.peek(control));
-      const world = readWorld(ns, nowMs, inFlight);
+      const world = readWorld(ns, nowMs, inFlight, orders);
       if (moveHome(world, orders)) {
         const self = ns.self();
         const pid = ns.exec(self.filename, "home", { threads: 1, temporary: true }, JSON.stringify({ control, inFlight }), port);
@@ -175,6 +183,7 @@ export async function main(ns: NS): Promise<void> {
         launched: news.launched + launched,
         refused: news.refused + refused,
         lastError: news.lastError,
+        outlook: outlook(world, orders) ?? null,
       };
       failures = 0;
     } catch (e) {
