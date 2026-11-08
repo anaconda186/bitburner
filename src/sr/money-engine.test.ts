@@ -11,13 +11,20 @@ const player = (hacking: number): Hacker => ({
   skills: { hacking, intelligence: 0 },
   mults: { hacking_chance: 1, hacking_exp: 1, hacking_money: 1, hacking_speed: 1, hacking_grow: 1 },
 });
-/** A rooted server with money: security 10, required level 1, unless overridden. */
+/**
+ * A rooted server with money: security 10, required level 1, unless
+ * overridden. Its growth is 0, so it can't be batched: these tests see the
+ * drain alone (batches are in money-engine.batch.test.ts).
+ */
 const target = (host: string, over: Partial<TargetView> = {}): TargetView => ({
   host,
   hasAdminRights: true,
   hackDifficulty: 10,
+  minDifficulty: 3,
   requiredHackingSkill: 1,
   moneyAvailable: 2e6,
+  moneyMax: 50e6,
+  serverGrowth: 0,
   ...over,
 });
 const ORDERS: EngineOrders = { split: SPLIT_MONEY, homeReserveGb: 0, mults: NEUTRAL_MULTS };

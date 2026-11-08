@@ -90,8 +90,11 @@ export const RAM_BUDGETS: BudgetTable = {
   // getServerSecurityLevel and getServerRequiredHackingLevel 0.1 each,
   // hasRootAccess, getServerMaxRam and getServerUsedRam 0.05 each; self and
   // the ports are free. No field may be called share (ns.share, 2.4): the
-  // split's share part is `sharing`.
-  "sr/h/engine.js": { budget: 4.65, contexts: EVERYWHERE },
+  // split's share part is `sharing`. #57 adds getServerMaxMoney,
+  // getServerMinSecurityLevel and getServerGrowth (0.1 each) for batches:
+  // 4.95. The batch code calls its thread counts hackThreads and growThreads,
+  // never hack or grow, which would be charged as ns.hack and ns.grow.
+  "sr/h/engine.js": { budget: 4.95, contexts: EVERYWHERE },
   // #57 (shared with #54): the buy-server action helper. Base 1.6,
   // cloud.purchaseServer 2.25.
   "sr/h/buy-server.js": { budget: 3.85, contexts: EVERYWHERE },

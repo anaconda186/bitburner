@@ -130,6 +130,16 @@ export function hackSecurityRise(threads: number, fraction: number): number {
 }
 
 /**
+ * Security a grow of `threads` adds when every thread is used: twice a
+ * hack's 0.002 per thread (ns.growthAnalyzeSecurity without a host). The game
+ * counts only the threads the growth actually needed, so this is the most it
+ * can add. src/Server/ServerHelpers.ts:202-211, src/NetscriptFunctions.ts:325-342.
+ */
+export function growSecurityRise(threads: number): number {
+  return 2 * FORTIFY_PER_THREAD * threads;
+}
+
+/**
  * One hack's duration in seconds, as the game computes it before formulas
  * turns it into ms. src/Hacking.ts:60-80. Darknet servers take a fixed 16 s
  * (:61), which this model doesn't cover.

@@ -159,7 +159,7 @@ export const WORKERS = {
     script: "sr/h/engine.js",
     port: 2,
     control: 3,
-    files: ["sr/money-engine.js", "sr/formulas.js"],
+    files: ["sr/money-engine.js", "sr/formulas.js", "sr/node-mults.js"],
     homeHeadroom: true,
   },
 } as const satisfies Record<string, WorkerSpec>;
