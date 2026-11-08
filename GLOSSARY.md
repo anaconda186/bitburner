@@ -87,6 +87,14 @@ _Avoid_: Victim, mark
 Hacking servers' starting money without growing it back, used before the run can afford anything better.
 _Avoid_: Early batching
 
+**RAM split**:
+How the money engine's RAM is shared between money, hacking exp and share, as fractions the conductor sends it. All zero is "off". Not a **Split**, which is a time.
+_Avoid_: Allocation, split (alone)
+
+**Job**:
+One launch of a one-call hack, grow or weaken script by the money engine: a target, a host, a thread count and when it should land.
+_Avoid_: Task, worker
+
 **Batch**:
 A hack, a grow and their weakens, timed to land together so the target ends up as it started.
 _Avoid_: Cycle, HWGW
