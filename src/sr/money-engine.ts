@@ -692,7 +692,9 @@ function farmJobs(s: EngineSnapshot, free: Map<string, number>, expPoolGb: numbe
     const onTarget = s.inFlight.filter((j) => j.target === t.host);
     const prepping = onTarget.some((j) => j.purpose === "farmPrep" && j.landsAtMs > s.nowMs);
     let launched: Job[];
-    if (!prepping && t.hackDifficulty - t.minDifficulty <= STATE_EPSILON) {
+    // Farmed already (its read security dips and rises with its cycles), or ready to start.
+    const farming = onTarget.some((j) => j.purpose === "farm" && j.landsAtMs > s.nowMs);
+    if (farming || (!prepping && t.hackDifficulty - t.minDifficulty <= STATE_EPSILON)) {
       const held = ramOf(onTarget.filter((j) => j.purpose === "farm" && j.landsAtMs > s.nowMs));
       launched = farmCycles(s, t, sizing, free, Math.min(budgetGb, sizing.capacityGb - held), tun);
     } else {
