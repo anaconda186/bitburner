@@ -18,7 +18,7 @@ import { backoffMs } from "./backoff.ts";
 import { decide, type Action, type ProbeReading, type Snapshot, type WorkerView } from "./decide.ts";
 import { awaitReply, isScriptDeath, launchHelper, pollReply, replyPorts, type Launched } from "./helper-calls.ts";
 import { readWorkerReport, type Json, type Reply } from "./helper-contract.ts";
-import { HELPER_SCRIPTS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName, type WorkerSpec } from "./helpers.ts";
+import { CALLS, HELPER_SCRIPTS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName, type WorkerSpec } from "./helpers.ts";
 import { MILESTONES, milestonesReached } from "./milestones.ts";
 import { openRunState } from "./run-state.ts";
 import { finishSummary, formatDuration, runFinished, splitLine, splitStats } from "./splits.ts";
@@ -44,6 +44,8 @@ type Memory = {
   nextPort: () => number;
   /** Each long-lived worker launched or found alive since this conductor started. */
   workers: { [W in WorkerName]?: WorkerBook };
+  /** Cloud servers bought since this conductor started (the network probe may not list them yet). */
+  bought: string[];
 };
 
 /**
@@ -127,6 +129,7 @@ function takeSnapshot(ns: NS, m: Memory): Snapshot {
     ...(m.lastCall ? { lastCall: m.lastCall } : {}),
     workers: readWorkers(ns, m, nowMs),
     controls: readControls(ns),
+    ...(m.bought.length > 0 ? { boughtServers: [...m.bought] } : {}),
   };
 }
 
@@ -143,6 +146,7 @@ async function carryOut(ns: NS, m: Memory, actions: readonly Action[]): Promise<
       case "call": {
         const reply = await callHelper(ns, m, action.script, action.host, action.arg);
         m.lastCall = { script: action.script, arg: action.arg, atMs: Date.now(), reply };
+        if (action.script === CALLS.buyServer && reply.ok && typeof reply.value === "string") m.bought.push(reply.value);
         ns.print(reply.ok ? `call ${action.script}: ok` : `call ${action.script}: failed: ${reply.error}`);
         break;
       }
@@ -193,7 +197,7 @@ export async function main(ns: NS): Promise<void> {
   const start: ConductorStart = { atMs: Date.now(), savedUpdatedAt: record.state.updatedAt };
   record.update((state) => noteBuild(state, buildOnHome(ns.read(MANIFEST_FILE)), start.atMs));
   let startAccounted = false;
-  const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts(), workers: {} };
+  const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts(), workers: {}, bought: [] };
   let beats = 0;
   let lastTerminalBeat = Date.now();
   let failures = 0;
