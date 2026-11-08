@@ -1,7 +1,16 @@
 // Run records out of the game (seam E): state files in, the watcher's log,
 // exports and the live table out.
 import { describe, expect, test } from "vitest";
-import { rolledBack, watchState, watchedMs, WATCH_GAP_MS, type WatchLog } from "./runs.ts";
+import {
+  exportName,
+  exportText,
+  parseRun,
+  rolledBack,
+  watchState,
+  watchedMs,
+  WATCH_GAP_MS,
+  type WatchLog,
+} from "./runs.ts";
 import { recordMilestone, type RunState } from "../src/sr/state.ts";
 
 const T0 = Date.UTC(2026, 10, 7, 12, 0, 0);
@@ -53,5 +62,39 @@ describe("the rollback watcher", () => {
     log = watchAll([two, two], log, 30);
     expect(30 * MIN - 2 * MIN).toBeGreaterThan(WATCH_GAP_MS);
     expect(watchedMs(log)).toBe(3 * MIN);
+  });
+});
+
+describe("exports", () => {
+  const done = at(at(START, "bn1.1", 10), "bn2.1", 20);
+
+  test("are named by the run's start date, its category and its build", () => {
+    expect(exportName(done)).toBe("2026-11-07T120000Z-open-aaaaaaa.json");
+    expect(exportName({ ...done, category: "strict", buildSha: "unknown" })).toBe("2026-11-07T120000Z-strict-unknown.json");
+  });
+
+  test("read back as the same run, with the watcher's log", () => {
+    const watch = watchAll([done]);
+    const r = parseRun(exportText(done, watch, T0 + 30 * MIN));
+    expect(r).toEqual({ ok: true, run: { state: done, watch } });
+  });
+
+  test("of a run nobody watched read back with no log", () => {
+    expect(parseRun(exportText(done, null, T0))).toEqual({ ok: true, run: { state: done, watch: null } });
+  });
+
+  test("a state file copied out by hand reads as an unwatched run", () => {
+    expect(parseRun(JSON.stringify(done))).toEqual({ ok: true, run: { state: done, watch: null } });
+  });
+
+  test("keep only the log of the run they hold", () => {
+    const other = watchAll([{ ...START, startedAt: T0 - MIN }]);
+    expect(parseRun(exportText(done, other, T0))).toMatchObject({ ok: true, run: { watch: null } });
+  });
+
+  test("refuse what isn't a run", () => {
+    expect(parseRun("not json")).toMatchObject({ ok: false });
+    expect(parseRun(JSON.stringify({ export: 99, state: done }))).toMatchObject({ ok: false, error: expect.stringMatching(/newer/) });
+    expect(parseRun(JSON.stringify({ ...done, category: "speedy" }))).toMatchObject({ ok: false });
   });
 });
