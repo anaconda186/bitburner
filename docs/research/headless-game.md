@@ -193,8 +193,8 @@ Measured on 2026-11-07 with the harness in `tools/harness/` and `npm run smoke`,
 
 - **The release zip's `resources/app/` is a usable static build.** Served over plain HTTP from 127.0.0.1, it runs in stock Chromium with no Electron. The smoke test passes on it, start command included.
 - **The 2 s Remote API auto-connect can't be relied on.** The game connects only once, 2 s after page start, and the port comes from the save, which loads after `initSwc()` (21 MB of wasm).
-  - On a new game there is no save, so the port is still 0 when the auto-connect fires. Page start to the "Exit Tutorial" button took 1.95–6.5 s across 19 headless loads.
-  - After a reload with a 15–20 KB save, the terminal was back in 1.4–4.8 s. Loading the same save seeded into a fresh browser took 2.1 s. That is a race against the 2 s timer, which the auto-connect often loses.
+  - On a new game there is no save, so the port is still 0 when the auto-connect fires. Page start to the "Exit Tutorial" button took 1.86–6.5 s across 22 headless loads.
+  - After a reload with a small save (about 15 KB), the terminal was back in 0.8–4.8 s. Loading the same save seeded into a fresh browser took 2.1 s. That is a race against the 2 s timer, which the auto-connect sometimes wins and sometimes loses.
   - So the harness always presses **Connect** on Options → Remote API after each load (`connectRemoteApi`). That takes about 0.6–1.4 s, menus included.
 - **A loaded save opens the "Offline for N seconds" dialog** about 230 ms after the terminal appears. It blocks Playwright's real clicks and takes the keyboard focus. Escape closes it. The harness retries each click after closing dialogs, and checks what it typed before pressing Enter. Without that, the reload step failed all 6 attempts of one series of 3 runs.
 - **`page.clock` was not tried.** The smoke test runs in real time (about half a minute when it passes), so it needed no speed-up.
@@ -219,11 +219,11 @@ The probe (`probeTimers`) times 100 ms `setTimeout`s in the game's page. The gam
 - **Error lines** in the terminal carry a class ending in `-error`, from the tss-react `makeStyles` key in `ANSIITypography`. A `tprint` starting with `ERROR` or `FAIL` gets it. `WARN` gets `-warning` instead (from the source; not run).
 - **A script that throws** opens a modal with `<h2>RUNTIME ERROR</h2>` and prints nothing to the terminal. The harness reads these modals too.
 - **The first submission** of the start command on a new game prints `Script boot.js does not exist on home.` as an error line, as designed (user story 2). The smoke test allows exactly that line, once, in the start phase only.
-- **Timings of a passing smoke** (4 passing runs on the build with #47 and #48 merged):
-  - first submission to the conductor's first state write: 4.5–9.4 s;
-  - reload: 1.4–4.8 s;
-  - retype to the conductor writing again: 3.7–5.6 s;
-  - the oldest heartbeat seen: 8.7–11.4 s.
+- **Timings of a passing smoke** (7 passing runs on the builds with #47, #48 and #49 merged):
+  - first submission to the conductor's first state write: 3.9–9.4 s;
+  - reload: 0.8–4.8 s;
+  - retype to the conductor writing again: 3.3–5.6 s;
+  - the oldest heartbeat seen: 2.8–11.4 s.
 
   The whole attempt takes about half a minute. The conductor's first iteration rewrites the file boot created, so `updatedAt` passes `startedAt` soon after `conductor: up`.
 - **The save** after a start is a 15 KB gzip. Reading it with `readSave` and loading it into a fresh browser with `seedSave` skips the tutorial and brings the run's files and state file onto home.
