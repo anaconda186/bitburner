@@ -245,5 +245,11 @@ export async function main(ns: NS): Promise<void> {
     post({ phase: "failed", lastError: text });
     ns.tprint(`ERROR casino: ${text}`);
   }
+  // Leave the page on the terminal, where these lines show (best effort).
+  try {
+    await goTo(ns, "Terminal");
+  } catch (back) {
+    if (isScriptDeath(back)) throw back;
+  }
   await launchBoot(ns);
 }
