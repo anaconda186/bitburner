@@ -15,7 +15,8 @@
 // Singularity calls; expensive reads belong to probe helpers.
 import type { NS } from "@ns";
 import { backoffMs } from "./backoff.ts";
-import { decide, type Action, type ProbeReading, type Snapshot, type WorkerView } from "./decide.ts";
+import { decide, engineOrders, type Action, type ProbeReading, type Snapshot, type WorkerView } from "./decide.ts";
+import { fleetBought } from "./fleet.ts";
 import { awaitReply, isScriptDeath, launchHelper, pollReply, replyPorts, type Launched } from "./helper-calls.ts";
 import { readWorkerReport, type Json, type Reply } from "./helper-contract.ts";
 import { CALLS, HELPER_SCRIPTS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeValues, type WorkerName, type WorkerSpec } from "./helpers.ts";
@@ -46,6 +47,8 @@ type Memory = {
   workers: { [W in WorkerName]?: WorkerBook };
   /** Cloud servers bought since this conductor started (the network probe may not list them yet). */
   bought: string[];
+  /** When this conductor first saw the fleet bought (#58: the exp start). */
+  fleetBoughtAtMs: number | undefined;
 };
 
 /**
@@ -119,7 +122,7 @@ function takeSnapshot(ns: NS, m: Memory): Snapshot {
   for (const script of HELPER_SCRIPTS) helperRamGb[script] = ns.getScriptRam(script, "home");
   if (m.lingeringCall !== undefined && !ns.isRunning(m.lingeringCall)) m.lingeringCall = undefined;
   const nowMs = Date.now();
-  return {
+  const s: Snapshot = {
     nowMs,
     freeRamGb: readFreeRam(ns, m),
     helperRamGb,
@@ -131,6 +134,8 @@ function takeSnapshot(ns: NS, m: Memory): Snapshot {
     controls: readControls(ns),
     ...(m.bought.length > 0 ? { boughtServers: [...m.bought] } : {}),
   };
+  if (m.fleetBoughtAtMs === undefined && fleetBought(s, engineOrders(s))) m.fleetBoughtAtMs = nowMs;
+  return m.fleetBoughtAtMs === undefined ? s : { ...s, fleetBoughtAtMs: m.fleetBoughtAtMs };
 }
 
 async function carryOut(ns: NS, m: Memory, actions: readonly Action[]): Promise<void> {
@@ -197,7 +202,7 @@ export async function main(ns: NS): Promise<void> {
   const start: ConductorStart = { atMs: Date.now(), savedUpdatedAt: record.state.updatedAt };
   record.update((state) => noteBuild(state, buildOnHome(ns.read(MANIFEST_FILE)), start.atMs));
   let startAccounted = false;
-  const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts(), workers: {}, bought: [] };
+  const m: Memory = { probes: {}, inFlight: new Map(), lingeringCall: undefined, lastCall: undefined, nextPort: replyPorts(), workers: {}, bought: [], fleetBoughtAtMs: undefined };
   let beats = 0;
   let lastTerminalBeat = Date.now();
   let failures = 0;

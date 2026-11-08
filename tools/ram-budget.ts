@@ -94,7 +94,10 @@ export const RAM_BUDGETS: BudgetTable = {
   // getServerMinSecurityLevel and getServerGrowth (0.1 each) for batches:
   // 4.95. The batch code calls its thread counts hackThreads and growThreads,
   // never hack or grow, which would be charged as ns.hack and ns.grow.
-  "sr/h/engine.js": { budget: 4.95, contexts: EVERYWHERE },
+  // #58 adds getServerBaseSecurityLevel (0.1) for target ranking (a target's
+  // first weaken from base security): 5.05, a hair over in the float sum,
+  // hence 5.1. Nor may a local be called ps (ns.ps, 0.2).
+  "sr/h/engine.js": { budget: 5.1, contexts: EVERYWHERE },
   // #57: the upgrade-server action helper. Base 1.6, cloud.upgradeServer 0.25.
   "sr/h/upgrade-server.js": { budget: 1.85, contexts: EVERYWHERE },
   // #57: the fleet probe. Base 1.6, cloud.getServerNames 1.05,
@@ -125,4 +128,6 @@ export const RAM_BUDGETS: BudgetTable = {
   "sr/j/hack.js": { budget: 1.75, contexts: EVERYWHERE },
   "sr/j/grow.js": { budget: 1.75, contexts: EVERYWHERE },
   "sr/j/weaken.js": { budget: 1.75, contexts: EVERYWHERE },
+  // #58: the share job, base 1.6 plus share 2.4. JOB_RAM_GB holds the same.
+  "sr/j/share.js": { budget: 4.0, contexts: EVERYWHERE },
 };

@@ -10,7 +10,7 @@
 // identifier named like an NS function. Never name anything here hack, grow,
 // weaken, share, run, exec, scan or probe; strings ("hack") are free.
 import {
-  grownMoney, growSecurityRise, growThreadsFor, growTimeMs, hackChance, hackFraction, hackSecurityRise, hackTimeMs,
+  grownMoney, growSecurityRise, growThreadsFor, growTimeMs, hackChance, hackExp, hackFraction, hackSecurityRise, hackTimeMs,
   NEUTRAL_MULTS, weakenAmount, weakenTimeMs, type HackTarget, type Hacker, type NodeMults, type Target,
 } from "./formulas.ts";
 import { pickMults } from "./node-mults.ts";
@@ -19,17 +19,22 @@ import { pickMults } from "./node-mults.ts";
 export const HACK_JOB = "sr/j/hack.js";
 export const GROW_JOB = "sr/j/grow.js";
 export const WEAKEN_JOB = "sr/j/weaken.js";
-export type JobScript = typeof HACK_JOB | typeof GROW_JOB | typeof WEAKEN_JOB;
+/** One 10-second share call (#58). */
+export const SHARE_JOB = "sr/j/share.js";
+export type JobScript = typeof HACK_JOB | typeof GROW_JOB | typeof WEAKEN_JOB | typeof SHARE_JOB;
+/** How long a share call lasts (src/NetworkShare/Share.ts ShareBonusTime). */
+export const SHARE_MS = 10_000;
 
 /**
  * GB per thread of each job script: base 1.6 plus its one call (hack 0.1, grow
- * and weaken 0.15). src/sr/money-engine.ram.test.ts checks them against the
+ * and weaken 0.15, share 2.4). src/sr/money-engine.ram.test.ts checks them against the
  * game's own RAM calculator.
  */
 export const JOB_RAM_GB: Readonly<Record<JobScript, number>> = {
   [HACK_JOB]: 1.7,
   [GROW_JOB]: 1.75,
   [WEAKEN_JOB]: 1.75,
+  [SHARE_JOB]: 4,
 };
 
 /**
@@ -124,17 +129,30 @@ export type TargetView = HackTarget & {
   readonly moneyMax: number;
   /** The security weakens stop at. */
   readonly minDifficulty: number;
+  /** The security it started at, which sets the hacking exp each thread earns (#58). */
+  readonly baseDifficulty: number;
   readonly serverGrowth: number;
 };
+
+/**
+ * What a job is for (#58): money (`drain`, `batch`, and `prep` for a target
+ * being made ready), hacking exp (`farm`) or share (`sharing`). Each draws on
+ * its own part of the RAM split.
+ */
+export type Purpose = "drain" | "batch" | "prep" | "farm" | "farmPrep" | "sharing";
+const MONEY_PURPOSES: readonly Purpose[] = ["drain", "batch", "prep"];
 
 /** One launch: `threads` of `script` on `host` against `target`, plus what the scheduler expects of it. */
 export type Job = {
   readonly script: JobScript;
   readonly host: string;
+  /** The server it acts on ("" for share, which has none). */
   readonly target: string;
   readonly threads: number;
   readonly additionalMsec: number;
-  /** When it should land, for the in-flight book. */
+  readonly purpose: Purpose;
+  /** When it was launched, and when it should land, for the in-flight book. */
+  readonly launchedAtMs: number;
   readonly landsAtMs: number;
   /** The share of the target's money it should take when it lands (0..1). */
   readonly steal: number;
@@ -166,14 +184,42 @@ const RAM_EPSILON = 1e-9;
  */
 export function schedule(s: EngineSnapshot, orders: EngineOrders, t: EngineTunables = ENGINE_TUNABLES): Job[] {
   const { free, poolGb } = ramLedger(s, orders);
-  const moneyPoolGb = orders.split.money * poolGb;
-  let budgetGb = moneyPoolGb - ramOf(s.inFlight);
-  const choice = chooseTarget(s, moneyPoolGb, t);
+  const money = moneyJobs(s, free, orders.split.money * poolGb, t);
+  const farmed = farmJobs(s, free, orders.split.exp * poolGb, money.busy, t);
+  const shared = shareJobs(s, free, orders.split.sharing * poolGb);
+  return [...money.jobs, ...farmed, ...shared];
+}
+
+/** RAM the engine's jobs for these purposes hold now (one past its landing is counted gone, as in `ramLedger`). */
+const heldFor = (s: EngineSnapshot, purposes: readonly Purpose[]): number =>
+  ramOf(s.inFlight.filter((j) => purposes.includes(j.purpose) && j.landsAtMs > s.nowMs));
+
+/**
+ * The money part of the split: batches on the chosen target, the next
+ * target's prep, and drain on every target nothing else is using.
+ */
+function moneyJobs(s: EngineSnapshot, free: Map<string, number>, moneyPoolGb: number, t: EngineTunables): { jobs: Job[]; busy: Set<string> } {
+  let budgetGb = moneyPoolGb - heldFor(s, MONEY_PURPOSES);
+  const { batch: choice, prep } = chooseTarget(s, moneyPoolGb, t);
   const jobs: Job[] = [];
+  // Targets the batches and preps are using (the farm keeps off them), and
+  // with the farm's, every target drain keeps off: it would undo the work in flight there.
+  const using = (purposes: readonly Purpose[]) =>
+    s.inFlight.filter((j) => purposes.includes(j.purpose) && j.landsAtMs > s.nowMs).map((j) => j.target);
+  const moneyBusy = new Set(using(["batch", "prep"]));
+  const busy = new Set([...moneyBusy, ...using(["farm", "farmPrep"])]);
+  if (choice !== undefined && moneyPoolGb > 0) moneyBusy.add(choice.target.host);
+  if (prep !== undefined) {
+    moneyBusy.add(prep.host);
+    busy.add(prep.host);
+    const prepHeld = ramOf(s.inFlight.filter((j) => j.purpose === "prep" && j.target === prep.host && j.landsAtMs > s.nowMs));
+    const prepared = prepare(s, prep, free, Math.min(budgetGb, t.prepShare * moneyPoolGb - prepHeld), t);
+    jobs.push(...prepared);
+    budgetGb -= ramOf(prepared);
+  }
   let pipelineGb = 0;
-  let exclude: string | undefined;
   if (choice !== undefined && (!choice.sizing.starved || batchesInFlight(s, choice.target.host))) {
-    exclude = choice.target.host;
+    busy.add(choice.target.host);
     if (!choice.sizing.starved) {
       const launched = batches(s, choice, free, budgetGb, t);
       jobs.push(...launched);
@@ -182,10 +228,10 @@ export function schedule(s: EngineSnapshot, orders: EngineOrders, t: EngineTunab
       pipelineGb = Math.max(0, choice.sizing.pipelineGb - held);
     }
   }
-  const drained = drain(s, free, budgetGb - pipelineGb, exclude);
+  const drained = drain(s, free, budgetGb - pipelineGb, busy);
   jobs.push(...drained);
   if (choice !== undefined && choice.sizing.starved && drained.length === 0) jobs.push(...batches(s, choice, free, budgetGb, t));
-  return jobs;
+  return { jobs, busy: moneyBusy };
 }
 
 /** GB a list of jobs holds. */
@@ -217,7 +263,8 @@ function ramLedger(s: EngineSnapshot, orders: EngineOrders): { free: Map<string,
   const free = new Map<string, number>();
   let poolGb = 0;
   for (const h of s.hosts) {
-    const ownGb = ramOf(s.inFlight.filter((j) => j.host === h.host));
+    // Jobs past their landing are counted gone: their RAM is in the free reading (or soon will be).
+    const ownGb = ramOf(s.inFlight.filter((j) => j.host === h.host && j.landsAtMs > s.nowMs));
     let reserveGb = orders.hostReserveGb?.[h.host] ?? 0;
     if (h.host === "home") {
       reserveGb = orders.homeReserveGb;
@@ -258,10 +305,10 @@ function project(t: TargetView, inFlight: readonly Job[]): Projection {
  * duration is fixed at launch (today's security); its chance and steal come
  * when it lands, so they are judged on the projected target.
  */
-function drain(s: EngineSnapshot, free: Map<string, number>, budget: number, exclude: string | undefined): Job[] {
+function drain(s: EngineSnapshot, free: Map<string, number>, budget: number, busy: ReadonlySet<string>): Job[] {
   const perThread = JOB_RAM_GB[HACK_JOB];
   let budgetGb = budget;
-  const plans = s.targets.filter((t) => t.host !== exclude).map((t) => project(t, s.inFlight));
+  const plans = s.targets.filter((t) => !busy.has(t.host)).map((t) => project(t, s.inFlight));
   const atLanding = (p: Projection): HackTarget => ({ ...p.now, hackDifficulty: p.security });
   const rate = (p: Projection): number => {
     const landing = atLanding(p);
@@ -291,6 +338,8 @@ function drain(s: EngineSnapshot, free: Map<string, number>, budget: number, exc
       target: best.now.host,
       threads,
       additionalMsec: 0,
+      purpose: "drain",
+      launchedAtMs: s.nowMs,
       landsAtMs: s.nowMs + hackTimeMs(best.now, s.player, s.mults),
       steal: Math.min(1, fraction * threads),
       securityRise: hackSecurityRise(threads, fraction),
@@ -334,8 +383,14 @@ export const ENGINE_TUNABLES = {
   badSecurity: 5,
   /** Projected money below this share of the maximum is a bad drift: hacking pauses. */
   badMoney: 0.5,
-  /** A new target must earn this many times the current one's to be switched to. */
+  /** A new target must earn this many times the current one's to be switched to ("clearly better", #58). */
   switchRatio: 1.25,
+  /** The most of the money RAM that preparing the next target may hold (#58: "about 10%"). */
+  prepShare: 0.1,
+  /** The exp farm launches each grow and hack at most this long before its duration would land it in its slot. */
+  farmLeadMs: 1000,
+  /** The least time between farm cycles' landings (a cycle's three land 2 landing gaps apart). */
+  farmSpacingMs: 250,
 } as const;
 
 export type EngineTunables = { readonly [K in keyof typeof ENGINE_TUNABLES]: number };
@@ -346,10 +401,9 @@ const STATE_EPSILON = 1e-6;
 /** A target's money and security at some moment of the projection. */
 type TargetState = { readonly money: number; readonly security: number };
 
-/** The full Target the grow formulas take (baseDifficulty is unused by them). */
+/** The full Target the formulas take, at `st`. */
 const growable = (t: TargetView, st: TargetState): Target => ({
   ...t,
-  baseDifficulty: t.minDifficulty,
   moneyAvailable: st.money,
   hackDifficulty: st.security,
 });
@@ -366,6 +420,8 @@ function landed(t: TargetView, st: TargetState, j: Job, s: EngineSnapshot): Targ
       };
     case WEAKEN_JOB:
       return { money: st.money, security: Math.max(t.minDifficulty, st.security + j.securityRise) };
+    case SHARE_JOB:
+      return st;
   }
 }
 
@@ -463,41 +519,282 @@ const batchable = (s: EngineSnapshot) =>
     (t) => t.hasAdminRights && t.moneyMax > 0 && t.serverGrowth > 0 && t.requiredHackingSkill <= s.player.skills.hacking,
   );
 
-/** The engine's grows and weakens are only ever batch jobs, so they show which target it batches. */
+/** Batch jobs on the target are in flight. */
 function batchesInFlight(s: EngineSnapshot, host: string): boolean {
-  return s.inFlight.some((j) => j.target === host && j.script !== HACK_JOB);
+  return s.inFlight.some((j) => j.target === host && j.purpose === "batch");
+}
+
+/** The target the engine batches now: that of the batch job it launched last. */
+function batchedNow(s: EngineSnapshot): string | undefined {
+  let last: Job | undefined;
+  for (const j of s.inFlight) if (j.purpose === "batch" && (last === undefined || j.launchedAtMs > last.launchedAtMs)) last = j;
+  return last?.target;
 }
 
 type Choice = { readonly target: TargetView; readonly sizing: Sizing };
 
 /**
- * The one target to batch (#58 brings the ranking and prep-then-switch): the
- * one whose batches would earn most on the money RAM, but the one already
- * batched while nothing earns `switchRatio` times as much.
+ * Ready for batches: at its minimum security and full money as read now,
+ * with nothing of its prep still to land.
  */
-function chooseTarget(s: EngineSnapshot, poolGb: number, tun: EngineTunables): Choice | undefined {
-  let best: Choice | undefined;
-  let current: Choice | undefined;
-  const latest = s.inFlight.filter((j) => j.script !== HACK_JOB).sort((a, b) => b.landsAtMs - a.landsAtMs)[0]?.target;
+const ready = (s: EngineSnapshot, t: TargetView): boolean =>
+  !drifted(t, { money: t.moneyAvailable, security: t.hackDifficulty }) &&
+  !s.inFlight.some((j) => j.target === t.host && j.purpose === "prep" && j.landsAtMs > s.nowMs);
+
+/**
+ * The target to batch, and the one to prepare (spec #41 user stories 59 and
+ * 60). Targets are ranked live by what their batches would earn on the money
+ * RAM (`sizeBatches`, our formulas), which for one pool is income per
+ * GB-second. With nothing batched yet the best is batched (its first batch
+ * starts with a repair wave). Otherwise the batches stay where they are unless
+ * the best earns `switchRatio` times as much ("clearly better"); then they
+ * move to it once it is `ready`, and until then it is prepared on the side.
+ */
+function chooseTarget(s: EngineSnapshot, poolGb: number, tun: EngineTunables): { batch?: Choice; prep?: TargetView } {
+  const ranked: Choice[] = [];
   for (const target of batchable(s)) {
     const sizing = sizeBatches(target, poolGb, s, tun);
-    if (sizing === undefined || !(sizing.incomePerSec > 0)) continue;
-    if (best === undefined || sizing.incomePerSec > best.sizing.incomePerSec) best = { target, sizing };
-    if (target.host === latest) current = { target, sizing };
+    if (sizing !== undefined && sizing.incomePerSec > 0) ranked.push({ target, sizing });
   }
-  if (current !== undefined && best !== undefined && current.sizing.incomePerSec * tun.switchRatio >= best.sizing.incomePerSec) {
-    return current;
+  ranked.sort((a, b) => b.sizing.incomePerSec - a.sizing.incomePerSec);
+  const best = ranked[0];
+  if (best === undefined) return {};
+  const host = batchedNow(s);
+  const current = ranked.find((c) => c.target.host === host);
+  if (current === undefined || current === best) return { batch: best };
+  if (best.sizing.incomePerSec < tun.switchRatio * current.sizing.incomePerSec) return { batch: current };
+  if (ready(s, best.target)) return { batch: best };
+  return { batch: current, prep: best.target };
+}
+
+/**
+ * Prepares a target for batches (#58): a repair wave (weaken to the minimum,
+ * grow to full, weaken) planned on the target as its prep in flight will
+ * leave it, within `budgetGb`. Each loop adds what the last ones couldn't
+ * fit. With `weakenOnly`, just the weaken (the exp farm needs no money).
+ */
+function prepare(
+  s: EngineSnapshot, t: TargetView, free: Map<string, number>, budgetGb: number, tun: EngineTunables, purpose: Purpose = "prep",
+): Job[] {
+  if (!(budgetGb > 0)) return [];
+  const weakenOnly = purpose === "farmPrep";
+  const onTarget = s.inFlight.filter((j) => j.target === t.host);
+  if (onTarget.some((j) => Math.abs(j.landsAtMs - s.nowMs) <= tun.guardMs)) return [];
+  const st = after(t, { money: t.moneyAvailable, security: t.hackDifficulty }, onTarget.filter((j) => j.landsAtMs > s.nowMs), s);
+  const needed = weakenOnly ? st.security - t.minDifficulty > STATE_EPSILON : drifted(t, st);
+  if (!needed) return [];
+  return repairWave(s, t, st, s.nowMs + weakenTimeMs(t, s.player, s.mults), free, budgetGb, tun, purpose, weakenOnly);
+}
+
+// ---------------------------------------------------------------------------
+// The exp farm (#58, spec #41 user story 61). Hack threads earn the most exp
+// per GB-second (a hack takes a quarter of a weaken's time), but a hack that
+// drains no money earns a quarter of its exp. So each hack lands just after a
+// 1-thread grow, which gives the server some money (a grow adds a dollar a
+// thread before multiplying), and just before a weaken that takes the
+// security back down. A cycle is grow, hack, weaken landing a landing gap
+// apart; cycles land a spacing apart. Unlike a batch, the three are not
+// launched together: each is launched just in time to land in its place (a
+// hack padded to a weaken's time would hold its RAM four times as long). The
+// weaken is the longest, so it is launched first and makes the slot; the
+// grow and then the hack follow in later loops, each within `farmLeadMs` of
+// its own duration. A slot whose grow or hack misses its window is dropped.
+
+/** Farmable: rooted, within the player's level, and earning exp (base security above 0). */
+const farmable = (s: EngineSnapshot) =>
+  s.targets.filter((t) => t.hasAdminRights && t.moneyMax > 0 && t.baseDifficulty > 0 && t.requiredHackingSkill <= s.player.skills.hacking);
+
+/**
+ * The farm's exp per GB-second of hack threads on a target at its minimum
+ * security: exp × (chance + (1 − chance)/4) over a thread's GB × hack time.
+ * Grows and weakens earn the same exp a thread, but there are few of them.
+ */
+function farmRate(s: EngineSnapshot, t: TargetView): number {
+  const at = { ...t, hackDifficulty: t.minDifficulty };
+  const chance = hackChance(at, s.player);
+  const exp = hackExp(growable(t, { money: t.moneyMax, security: t.minDifficulty }), s.player, s.mults);
+  return (exp * (chance + (1 - chance) / 4)) / (JOB_RAM_GB[HACK_JOB] * hackTimeMs(at, s.player, s.mults));
+}
+
+/** One farm cycle's shape on a target: the hack's threads, the weaken's, and how far apart cycles land. */
+type FarmSizing = {
+  readonly hackThreads: number;
+  readonly weakenThreads: number;
+  readonly spacingMs: number;
+  readonly fraction: number;
+  /** The RAM its cycles hold once running. */
+  readonly capacityGb: number;
+};
+
+/**
+ * Cycles that fill `poolGb`: at the spacing, the most hack threads whose
+ * cycles (each job held for its duration plus about the lead) fit. With too
+ * little RAM for that, cycles come less often, each with the hack threads at
+ * which a hack's security rise stops growing (`ceil(1/fraction)`), so the
+ * grow and the weaken are spread over as many hack threads as is worth it.
+ */
+function farmSizing(s: EngineSnapshot, t: TargetView, poolGb: number, tun: EngineTunables): FarmSizing | undefined {
+  if (!(poolGb > 0)) return undefined;
+  const at = { ...t, hackDifficulty: t.minDifficulty };
+  const fraction = hackFraction(at, s.player, s.mults);
+  const perWeaken = weakenAmount(1, 1, s.mults);
+  const weakenFor = (h: number) => Math.max(1, Math.ceil((hackSecurityRise(h, fraction) + growSecurityRise(1)) / perWeaken - 1e-9));
+  const held = (script: JobScript, ms: number) => JOB_RAM_GB[script] * (ms + tun.farmLeadMs / 2);
+  const fixed = (h: number) =>
+    weakenFor(h) * held(WEAKEN_JOB, weakenTimeMs(at, s.player, s.mults)) + held(GROW_JOB, growTimeMs(at, s.player, s.mults));
+  const perHack = held(HACK_JOB, hackTimeMs(at, s.player, s.mults));
+  const cost = (h: number) => fixed(h) + h * perHack; // GB-ms per cycle
+  // A hack is one job (see farmCycles), so it fits on one host: half the biggest, at most.
+  const biggestGb = Math.max(0, ...s.hosts.map((h) => h.maxRamGb));
+  const hostCap = Math.max(1, Math.floor(Math.min(biggestGb, poolGb) / 2 / JOB_RAM_GB[HACK_JOB]));
+  const room = poolGb * tun.farmSpacingMs;
+  let lo = 0;
+  let hi = hostCap;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (cost(mid) <= room) lo = mid;
+    else hi = mid - 1;
   }
-  return best;
+  // Past ceil(1/fraction) threads a hack's security rise stops growing, so
+  // below that, fewer and bigger cycles spread the grow and weaken further.
+  const worthIt = Math.min(fraction > 0 ? Math.ceil(1 / fraction) : Infinity, hostCap);
+  const h = Math.max(1, lo, worthIt);
+  const spacingMs = Math.max(tun.farmSpacingMs, cost(h) / poolGb);
+  return { hackThreads: h, weakenThreads: weakenFor(h), spacingMs, fraction, capacityGb: Math.min(poolGb, cost(h) / spacingMs) };
+}
+
+/** The farm's main target now: that of its latest launch. */
+function farmedNow(s: EngineSnapshot): string | undefined {
+  let last: Job | undefined;
+  for (const j of s.inFlight) if (j.purpose === "farm" && (last === undefined || j.launchedAtMs > last.launchedAtMs)) last = j;
+  return last?.target;
+}
+
+/**
+ * The exp part of the split. Targets in order of exp per GB-second
+ * (`farmRate`), the one farmed now first until another earns `switchRatio`
+ * times as much, each given the RAM its cycles can use (one target's cycles
+ * are capped by the spacing and the biggest host) until the exp RAM is all
+ * given out. A target above its minimum security is weakened first (its
+ * prep, `farmPrep`: with `prepShare` of the exp RAM while cycles run
+ * elsewhere, else with all of it), and farmed once it is down.
+ */
+function farmJobs(s: EngineSnapshot, free: Map<string, number>, expPoolGb: number, busy: ReadonlySet<string>, tun: EngineTunables): Job[] {
+  if (!(expPoolGb > 0)) return [];
+  let budgetGb = expPoolGb - heldFor(s, ["farm", "farmPrep"]);
+  const ranked = farmable(s).filter((t) => !busy.has(t.host)).map((t) => ({ t, rate: farmRate(s, t) })).filter((x) => x.rate > 0);
+  ranked.sort((a, b) => b.rate - a.rate);
+  const best = ranked[0];
+  if (best === undefined) return [];
+  const host = farmedNow(s);
+  const current = ranked.find((x) => x.t.host === host);
+  const first = current === undefined || best.rate >= tun.switchRatio * current.rate ? best : current;
+  const order = [first, ...ranked.filter((x) => x !== first)];
+  const jobs: Job[] = [];
+  let poolLeft = expPoolGb;
+  for (const { t } of order) {
+    if (!(poolLeft > 0) || !(budgetGb > 0)) break;
+    const sizing = farmSizing(s, t, poolLeft, tun);
+    if (sizing === undefined) break;
+    poolLeft -= sizing.capacityGb;
+    const onTarget = s.inFlight.filter((j) => j.target === t.host);
+    const prepping = onTarget.some((j) => j.purpose === "farmPrep" && j.landsAtMs > s.nowMs);
+    let launched: Job[];
+    // Farmed already (its read security dips and rises with its cycles), or ready to start.
+    const farming = onTarget.some((j) => j.purpose === "farm" && j.landsAtMs > s.nowMs);
+    if (farming || (!prepping && t.hackDifficulty - t.minDifficulty <= STATE_EPSILON)) {
+      const held = ramOf(onTarget.filter((j) => j.purpose === "farm" && j.landsAtMs > s.nowMs));
+      launched = farmCycles(s, t, sizing, free, Math.min(budgetGb, sizing.capacityGb - held), tun);
+    } else {
+      const prepHeld = ramOf(onTarget.filter((j) => j.purpose === "farmPrep" && j.landsAtMs > s.nowMs));
+      const cap = current === undefined && jobs.length === 0 ? budgetGb : Math.min(budgetGb, tun.prepShare * expPoolGb - prepHeld);
+      launched = prepare(s, t, free, cap, tun, "farmPrep");
+    }
+    jobs.push(...launched);
+    budgetGb -= ramOf(launched);
+  }
+  return jobs;
+}
+
+/** This loop's farm launches on `t`: new slots' weakens, then the grows and hacks whose windows have come. */
+function farmCycles(s: EngineSnapshot, t: TargetView, sizing: FarmSizing, free: Map<string, number>, budgetGb: number, tun: EngineTunables): Job[] {
+  // No landing guard here (cycles land too close together for one): each
+  // job's duration is read from the target as it is when it is launched, in
+  // the same tick, so it lands where planned whatever lands around it. Only
+  // the weaken's size leans on the projection, and the next cycle's weaken
+  // takes up any drift.
+  const onTarget = s.inFlight.filter((j) => j.target === t.host);
+  const gap = tun.landGapMs;
+  const span = 2 * gap;
+  const quiet = sizing.spacingMs - span;
+  const read: TargetState = { money: t.moneyAvailable, security: t.hackDifficulty };
+  const perWeaken = weakenAmount(1, 1, s.mults);
+  const lead = tun.farmLeadMs;
+  const jobs: Job[] = [];
+  let budget = budgetGb;
+  const near = (a: number, b: number) => Math.abs(a - b) < 1;
+  // Each slot (its grow's landing) is known by its weaken, which lands 2 gaps after.
+  const slotsOf = (js: readonly Job[]) =>
+    js.filter((j) => j.purpose === "farm" && j.script === WEAKEN_JOB && j.target === t.host).map((j) => j.landsAtMs - span);
+  const landings = [...onTarget.map((j) => j.landsAtMs), ...slotsOf(onTarget).flatMap((x) => [x, x + gap])];
+  const place = (part: Part): Job[] | undefined => {
+    const placed = placeParts(s, t, free, [part], budget, "farm");
+    if (placed !== undefined) {
+      jobs.push(...placed);
+      budget -= ramOf(placed);
+    }
+    return placed;
+  };
+  // 1. New slots, as far ahead as a weaken launched now can land.
+  const from = s.nowMs + weakenTimeMs(t, s.player, s.mults) - span;
+  for (let slot = freeSlot(landings, from, span, quiet); slot <= from + lead; slot = freeSlot(landings, slot + sizing.spacingMs, span, quiet)) {
+    // The weaken takes the security down from wherever the jobs before it
+    // leave it, plus this cycle's grow and hack (as if the hack succeeds).
+    const st = after(t, read, [...onTarget, ...jobs].filter((j) => j.landsAtMs > s.nowMs && j.landsAtMs < slot), s);
+    const rise = hackSecurityRise(sizing.hackThreads, sizing.fraction) + growSecurityRise(1);
+    const threads = Math.max(sizing.weakenThreads, Math.ceil((st.security - t.minDifficulty + rise) / perWeaken - 1e-9));
+    if (place({ script: WEAKEN_JOB, threads, landsAtMs: slot + span }) === undefined) break;
+    landings.push(slot, slot + gap, slot + span);
+  }
+  // 2. Grows, then hacks, for the slots whose launch windows are open now.
+  const all = () => [...onTarget, ...jobs];
+  const growMs = growTimeMs(t, s.player, s.mults);
+  const hackMs = hackTimeMs(t, s.player, s.mults);
+  const open = (landsAt: number, ms: number) => landsAt - s.nowMs - ms >= 0 && landsAt - s.nowMs - ms <= lead;
+  for (const slot of slotsOf(all())) {
+    if (all().some((j) => j.script === GROW_JOB && near(j.landsAtMs, slot)) || !open(slot, growMs)) continue;
+    place({ script: GROW_JOB, threads: 1, landsAtMs: slot });
+  }
+  for (const slot of slotsOf(all())) {
+    const hackAt = slot + gap;
+    if (!all().some((j) => j.script === GROW_JOB && near(j.landsAtMs, slot))) continue;
+    if (all().some((j) => j.script === HACK_JOB && near(j.landsAtMs, hackAt)) || !open(hackAt, hackMs)) continue;
+    // One job, on one host: pieces landing together would each take from
+    // what the one before left, and a piece after one that took all the
+    // money would earn a quarter of the exp.
+    const roomiestGb = Math.max(0, ...free.values());
+    const threads = Math.min(sizing.hackThreads, Math.floor((Math.min(budget, roomiestGb) + RAM_EPSILON) / JOB_RAM_GB[HACK_JOB]));
+    if (threads < 1) break;
+    place({ script: HACK_JOB, threads, landsAtMs: hackAt, fraction: sizing.fraction, whole: true });
+  }
+  return jobs;
 }
 
 /** One planned job before it has a host: its landing and its threads. */
-type Part = { readonly script: JobScript; readonly threads: number; readonly landsAtMs: number; readonly fraction?: number };
+type Part = {
+  readonly script: JobScript;
+  readonly threads: number;
+  readonly landsAtMs: number;
+  readonly fraction?: number;
+  /** All on one host (a grow always is). */
+  readonly whole?: boolean;
+};
 
 /** Each script's duration on the target as it is now, when the jobs' calls will start. */
 function durationMs(script: JobScript, t: TargetView, s: EngineSnapshot): number {
   if (script === HACK_JOB) return hackTimeMs(t, s.player, s.mults);
   if (script === GROW_JOB) return growTimeMs(t, s.player, s.mults);
+  if (script === SHARE_JOB) return SHARE_MS;
   return weakenTimeMs(t, s.player, s.mults);
 }
 
@@ -509,7 +806,7 @@ function durationMs(script: JobScript, t: TargetView, s: EngineSnapshot): number
  * (`undefined`), within `budgetGb`; `free` is only changed when they fit.
  */
 function placeParts(
-  s: EngineSnapshot, t: TargetView, free: Map<string, number>, parts: readonly Part[], budgetGb: number,
+  s: EngineSnapshot, t: TargetView, free: Map<string, number>, parts: readonly Part[], budgetGb: number, purpose: Purpose,
 ): Job[] | undefined {
   const trial = new Map(free);
   const jobs: Job[] = [];
@@ -521,7 +818,7 @@ function placeParts(
       const host = roomiest(trial);
       if (host === undefined) return undefined;
       const fits = Math.min(left, Math.floor(((trial.get(host) ?? 0) + RAM_EPSILON) / perThread));
-      if (fits < 1 || (part.script === GROW_JOB && fits < left)) return undefined;
+      if (fits < 1 || ((part.script === GROW_JOB || part.whole === true) && fits < left)) return undefined;
       trial.set(host, (trial.get(host) ?? 0) - fits * perThread);
       used += fits * perThread;
       left -= fits;
@@ -531,7 +828,10 @@ function placeParts(
         host,
         target: t.host,
         threads: fits,
-        additionalMsec: part.landsAtMs - s.nowMs - durationMs(part.script, t, s),
+        // (Rounding can leave a slot a hair before a weaken launched now could land.)
+        additionalMsec: Math.max(0, part.landsAtMs - s.nowMs - durationMs(part.script, t, s)),
+        purpose,
+        launchedAtMs: s.nowMs,
         landsAtMs: part.landsAtMs,
         steal: part.script === HACK_JOB ? Math.min(1, fits * fraction) : 0,
         securityRise:
@@ -564,6 +864,7 @@ const drifted = (t: TargetView, st: TargetState): boolean =>
  */
 function repairWave(
   s: EngineSnapshot, t: TargetView, st: TargetState, slot: number, free: Map<string, number>, budgetGb: number, tun: EngineTunables,
+  purpose: Purpose, weakenOnly = false,
 ): Job[] {
   const perWeaken = weakenAmount(1, 1, s.mults);
   const jobs: Job[] = [];
@@ -573,12 +874,13 @@ function repairWave(
     // As much of the weaken as fits.
     const room = Math.min(budget, [...free.values()].reduce((a, b) => a + Math.max(0, b), 0));
     const threads = Math.min(fullWeaken, Math.floor((room + RAM_EPSILON) / JOB_RAM_GB[WEAKEN_JOB]));
-    const placed = threads > 0 ? placeParts(s, t, free, [{ script: WEAKEN_JOB, threads, landsAtMs: slot }], budget) : undefined;
+    const placed = threads > 0 ? placeParts(s, t, free, [{ script: WEAKEN_JOB, threads, landsAtMs: slot }], budget, purpose) : undefined;
     if (placed === undefined) return jobs;
     jobs.push(...placed);
     budget -= ramOf(placed);
     if (threads < fullWeaken) return jobs;
   }
+  if (weakenOnly) return jobs;
   const minSt: TargetState = { money: st.money, security: t.minDifficulty };
   const fullGrow = growThreadsFor(growable(t, minSt), s.player, t.moneyMax, 1, s.mults);
   if (!(fullGrow > 0) || !Number.isFinite(fullGrow)) return jobs;
@@ -591,10 +893,10 @@ function repairWave(
   let hi = fullGrow;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if (placeParts(s, t, new Map(free), wave(mid), budget) !== undefined) lo = mid;
+    if (placeParts(s, t, new Map(free), wave(mid), budget, purpose) !== undefined) lo = mid;
     else hi = mid - 1;
   }
-  if (lo > 0) jobs.push(...(placeParts(s, t, free, wave(lo), budget) ?? []));
+  if (lo > 0) jobs.push(...(placeParts(s, t, free, wave(lo), budget, purpose) ?? []));
   return jobs;
 }
 
@@ -613,17 +915,22 @@ function batches(s: EngineSnapshot, choice: Choice, free: Map<string, number>, b
   const onTarget = s.inFlight.filter((j) => j.target === t.host);
   if (onTarget.some((j) => Math.abs(j.landsAtMs - s.nowMs) <= tun.guardMs)) return [];
   const toLand = onTarget.filter((j) => j.landsAtMs > s.nowMs);
-  let st = after(t, { money: t.moneyAvailable, security: t.hackDifficulty }, toLand, s);
-  const lastLanding = Math.max(-Infinity, ...onTarget.map((j) => j.landsAtMs));
+  const read: TargetState = { money: t.moneyAvailable, security: t.hackDifficulty };
   const earliest = s.nowMs + weakenTimeMs(t, s.player, s.mults);
-  const quiet = tun.spacingMs - 3 * tun.landGapMs;
-  let slot = Math.max(earliest, lastLanding + quiet);
+  const span = 3 * tun.landGapMs;
+  const quiet = tun.spacingMs - span;
+  const landings = onTarget.map((j) => j.landsAtMs);
   const jobs: Job[] = [];
   let budget = budgetGb;
   let hacking = toLand.some((j) => j.script === HACK_JOB);
-  while (slot <= earliest + tun.launchAheadMs) {
+  for (let slot = freeSlot(landings, earliest, span, quiet); slot <= earliest + tun.launchAheadMs; slot = freeSlot(landings, slot + tun.spacingMs, span, quiet)) {
+    // Planned on the target as everything landing before this slot leaves it.
+    // A slot may come before jobs already on their way (ones launched while
+    // the target's security, and so their durations, were higher): a batch
+    // leaves the target as it found it, so they land as planned.
+    const st = after(t, read, [...toLand, ...jobs].filter((j) => j.landsAtMs < slot), s);
     if (hacking ? badlyDrifted(t, st, tun) : drifted(t, st)) {
-      jobs.push(...repairWave(s, t, st, slot, free, budget, tun));
+      jobs.push(...repairWave(s, t, st, slot, free, budget, tun, "batch"));
       break;
     }
     const parts = (hackThreads: number): Part[] | undefined => {
@@ -639,7 +946,7 @@ function batches(s: EngineSnapshot, choice: Choice, free: Map<string, number>, b
     };
     const fits = (hackThreads: number): boolean => {
       const p = parts(hackThreads);
-      return p !== undefined && placeParts(s, t, new Map(free), p, budget) !== undefined;
+      return p !== undefined && placeParts(s, t, new Map(free), p, budget, "batch") !== undefined;
     };
     // The sized batch, or the biggest smaller one that fits in the RAM left.
     let hackThreads = choice.sizing.hackThreads;
@@ -654,15 +961,28 @@ function batches(s: EngineSnapshot, choice: Choice, free: Map<string, number>, b
       hackThreads = lo;
     }
     const chosen = hackThreads >= 1 ? parts(hackThreads) : undefined;
-    const placed = chosen === undefined ? undefined : placeParts(s, t, free, chosen, budget);
+    const placed = chosen === undefined ? undefined : placeParts(s, t, free, chosen, budget, "batch");
     if (placed === undefined) break;
     jobs.push(...placed);
+    landings.push(...placed.map((j) => j.landsAtMs));
     budget -= ramOf(placed);
-    st = after(t, st, placed, s);
-    slot += tun.spacingMs;
     hacking = true;
   }
   return jobs;
+}
+
+/**
+ * The first slot from `from` whose landings (`span` long) keep `quiet` clear
+ * of every landing on the target: before it, so a launch finds a quiet window
+ * between batches, and after it, so the next batch starts a spacing later.
+ */
+function freeSlot(landings: readonly number[], from: number, span: number, quiet: number): number {
+  let slot = from;
+  for (;;) {
+    const clash = landings.filter((l) => l > slot - quiet && l < slot + span + quiet);
+    if (clash.length === 0) return slot;
+    slot = Math.max(...clash) + quiet;
+  }
 }
 
 /**
@@ -684,6 +1004,31 @@ export function outlook(s: EngineSnapshot, orders: EngineOrders, tun: EngineTuna
   const twice = best(2 * poolGb);
   if (now === undefined || twice === undefined) return undefined;
   return { target: now.host, poolGb, incomePerSec: now.income, incomeAt2xPerSec: Math.max(now.income, twice.income) };
+}
+
+/**
+ * The share part of the split (#58): share jobs, one 10-second ns.share()
+ * each, filling what that part has free, roomiest host first. They end
+ * within 10 s, so the next loops launch them again and a split change
+ * reaches them within 10 s. Share has no target ("").
+ */
+function shareJobs(s: EngineSnapshot, free: Map<string, number>, sharePoolGb: number): Job[] {
+  let budgetGb = sharePoolGb - heldFor(s, ["sharing"]);
+  const perThread = JOB_RAM_GB[SHARE_JOB];
+  const jobs: Job[] = [];
+  for (;;) {
+    const host = roomiest(free);
+    if (host === undefined) break;
+    const threads = Math.floor((Math.min(free.get(host) ?? 0, budgetGb) + RAM_EPSILON) / perThread);
+    if (threads < 1) break;
+    jobs.push({
+      script: SHARE_JOB, host, target: "", threads, additionalMsec: 0, purpose: "sharing",
+      launchedAtMs: s.nowMs, landsAtMs: s.nowMs + SHARE_MS, steal: 0, securityRise: 0,
+    });
+    free.set(host, (free.get(host) ?? 0) - threads * perThread);
+    budgetGb -= threads * perThread;
+  }
+  return jobs;
 }
 
 /** The host with the most free RAM (ties by name). */

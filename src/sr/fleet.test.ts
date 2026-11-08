@@ -3,7 +3,7 @@
 // ram × $55,000 × CloudServerCost × CloudServerSoftcap^(log2(ram) − 6).
 import { describe, expect, test } from "vitest";
 import { decide, engineOrders, type Snapshot } from "./decide.ts";
-import { FLEET_TUNABLES, fleetWant } from "./fleet.ts";
+import { FLEET_TUNABLES, fleetBought, fleetWant } from "./fleet.ts";
 import type { Json } from "./helper-contract.ts";
 import { CALLS, PROBES, WORKERS } from "./helpers.ts";
 
@@ -185,5 +185,30 @@ describe("the fleet: one purchase per action", () => {
     expect(BUY).toBe("sr/h/buy-server.js");
     expect(UPGRADE).toBe("sr/h/upgrade-server.js");
     expect(WORKERS.engine.script).toBe("sr/h/engine.js");
+  });
+});
+
+describe("the fleet is bought (#58: the exp start begins then)", () => {
+  const bought = (s: Snapshot) => fleetBought(s, engineOrders(s));
+  // As in "payback and money": doubling sr-24 to 32 GB costs $880k and pays back in 68.75 s.
+  const servers = [...slots(24, 64), { host: "sr-24", ramGb: 16 }];
+
+  test("once every slot is owned and the rule has nothing more to buy", () => {
+    expect(bought(snap(servers, { money: 879_999 }))).toBe(true);
+    const slow = { ...OUTLOOK, incomeAt2xPerSec: OUTLOOK.incomePerSec + 20 * OUTLOOK.poolGb };
+    expect(bought(snap(servers, { outlook: slow }))).toBe(true);
+  });
+
+  test("not while the rule would still buy, nor with a slot empty", () => {
+    expect(bought(snap(servers, { money: 880_000 }))).toBe(false);
+    expect(bought(snap(slots(24, 64), { money: 0 }))).toBe(false);
+  });
+
+  test("not on a fleet reading older than the last purchase, nor before the first reading", () => {
+    const s = snap(servers, { money: 0 });
+    const last = { script: UPGRADE, arg: {}, atMs: NOW, reply: { ok: true, value: "sr-24" } } as const;
+    expect(bought({ ...s, lastCall: last })).toBe(false);
+    const { fleet: _unread, ...probes } = s.probes;
+    expect(bought({ ...s, probes })).toBe(false);
   });
 });
