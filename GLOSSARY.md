@@ -92,7 +92,7 @@ How the money engine's RAM is shared between money, hacking exp and share, as fr
 _Avoid_: Allocation, split (alone)
 
 **Job**:
-One launch of a one-call hack, grow or weaken script by the money engine: a target, a host, a thread count and when it should land.
+One launch of a one-call hack, grow, weaken or share script by the money engine: a target, a host, a thread count and when it should land.
 _Avoid_: Task, worker
 
 **Batch**:
@@ -102,6 +102,10 @@ _Avoid_: Cycle, HWGW
 **Exp farm**:
 RAM spent on earning hacking exp rather than money.
 _Avoid_: Grinding
+
+**Exp start**:
+The first minutes after the fleet is bought, when the whole RAM split is exp.
+_Avoid_: Warm-up
 
 **Final climb**:
 The stretch after the last install, from no exp up to the hacking level the BitNode's World Daemon requires.
