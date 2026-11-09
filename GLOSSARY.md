@@ -87,6 +87,14 @@ _Avoid_: Victim, mark
 Hacking servers' starting money without growing it back, used before the run can afford anything better.
 _Avoid_: Early batching
 
+**RAM split**:
+How the money engine's RAM is shared between money, hacking exp and share, as fractions the conductor sends it. All zero is "off". Not a **Split**, which is a time.
+_Avoid_: Allocation, split (alone)
+
+**Job**:
+One launch of a one-call hack, grow, weaken or share script by the money engine: a target, a host, a thread count and when it should land.
+_Avoid_: Task, worker
+
 **Batch**:
 A hack, a grow and their weakens, timed to land together so the target ends up as it started.
 _Avoid_: Cycle, HWGW
@@ -94,6 +102,10 @@ _Avoid_: Cycle, HWGW
 **Exp farm**:
 RAM spent on earning hacking exp rather than money.
 _Avoid_: Grinding
+
+**Exp start**:
+The first minutes after the fleet is bought, when the whole RAM split is exp.
+_Avoid_: Warm-up
 
 **Final climb**:
 The stretch after the last install, from no exp up to the hacking level the BitNode's World Daemon requires.
@@ -155,6 +167,10 @@ _Avoid_: Checkpoint, snapshot
 A save made only to measure the game's behaviour, which may be edited and may carry the game's exploit flag. It is never a milestone save, never a starting point for a scenario test, and never part of a run.
 _Avoid_: Test save, debug save
 
+**Golden values**:
+Results recorded from the game's own `ns.formulas` on a lab save, which the run's formula model must reproduce exactly.
+_Avoid_: Reference values, expected outputs
+
 **Release**:
 The latest build that passed every check required before runs may use it. The start command always downloads the current release.
 _Avoid_: Deploy, version
@@ -174,3 +190,11 @@ _Avoid_: Lap, segment time
 **Reload loss**:
 The real time a page reload costs a run: the rollback to the last autosave plus the time until the run is going again, including the human's retype. A split's gross time includes it; its net time subtracts it.
 _Avoid_: Downtime, penalty
+
+**Segment**:
+The real time between two milestones of a run. When two runs are compared, it runs from the previous milestone both reached, so a milestone one run skipped doesn't distort it.
+_Avoid_: Split (a split always runs from the start), lap
+
+**Rolled-back milestone**:
+A milestone the state file once recorded and a page reload later took away, because the save it went back to was older. Only the rollback watcher can see one; without it, rollbacks are unobserved, not absent.
+_Avoid_: Lost split, undone milestone

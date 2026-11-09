@@ -5,3 +5,17 @@ dist/
 .DS_Store
 Thumbs.db
 .claude/worktrees/
+# fetch-game output: the pinned game build and sources (never committed)
+.game/
+# compiled game scripts (npm run build); published only to the release branch
+build/
+# exported run records (compare)
+runs/
+# smoke test evidence from failed attempts (npm run smoke)
+.smoke/
+# dev loop compiles (npm run dev, npm run scenario)
+.dev/
+# lab saves: edited saves for measuring the game, never milestone saves
+lab-saves/
+# Python bytecode (the research models)
+__pycache__/
