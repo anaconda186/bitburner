@@ -72,7 +72,7 @@ describe("a split's stats come from the probes", () => {
   });
   const route = (currentNode: number, ownedSF: Record<number, number> = {}) =>
     ({ ok: true, value: { currentNode, ownedSF, lastAugReset: T0, lastNodeReset: T0 }, atMs: T0 }) as const;
-  const stats = { ok: true, value: { hack: 812, money: 3.2e9, M: 2.41, homeRam: 512 }, atMs: T0 } as const;
+  const stats = { ok: true, value: { hack: 812, money: 3.2e9, M: 2.41, homeRam: 512, city: "Aevum", casinoWinnings: 4e9 }, atMs: T0 } as const;
 
   test("unknown before any probe has read the game", () => {
     expect(splitStats(snap({}))).toEqual(UNKNOWN);

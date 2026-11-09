@@ -167,8 +167,14 @@ export function currentBuild(state: RunState): string {
   return typeof last?.sha === "string" ? last.sha : state.buildSha;
 }
 
-/** A conductor start: when, and the heartbeat (`updatedAt`) the file held then. */
-export type ConductorStart = { readonly atMs: number; readonly savedUpdatedAt: number };
+/**
+ * A conductor start: when, and the heartbeat (`updatedAt`) the file held then.
+ * `afterCasino` (#56): the casino had reported on its port by the
+ * conductor's first loop. Ports are empty after every load, so the casino
+ * ran in this page load before the conductor came up: the load was one of
+ * its script reloads (or a page reload mid-casino, which looks the same).
+ */
+export type ConductorStart = { readonly atMs: number; readonly savedUpdatedAt: number; readonly afterCasino?: boolean };
 
 /** The game's reset times (`getResetInfo`, read by the route probe). */
 export type ResetTimes = { readonly lastAugReset: number; readonly lastNodeReset: number };
@@ -181,7 +187,12 @@ export type ResetTimes = { readonly lastAugReset: number; readonly lastNodeReset
  *     an install when the BitNode didn't change with it, and is no loss;
  *   - any other start is a page reload (or a kill): it appends one reload
  *     record, the gap being the time since the saved heartbeat, which the
- *     reload rolled back to.
+ *     reload rolled back to;
+ *   - except a start `afterCasino`: the casino's script reloads are how it
+ *     plays, not reload loss (GLOSSARY "Script reload", "Reload loss"), and
+ *     its time stays in gross and net alike. No record. A page reload in the
+ *     middle of the casino looks the same and goes uncounted too; it costs at
+ *     most one hand and the reload, since the casino saves before each hand.
  */
 export function accountStart(state: RunState, start: ConductorStart, reset: ResetTimes): RunState {
   if (state.resetAt === null) return { ...state, resetAt: reset.lastAugReset };
@@ -189,6 +200,7 @@ export function accountStart(state: RunState, start: ConductorStart, reset: Rese
     const installed = reset.lastAugReset > reset.lastNodeReset ? 1 : 0;
     return { ...state, installs: state.installs + installed, resetAt: reset.lastAugReset };
   }
+  if (start.afterCasino === true) return state;
   const reload: Reload = { atMs: start.atMs, gapMs: Math.max(0, start.atMs - start.savedUpdatedAt) };
   return { ...state, reloads: [...state.reloads, reload] };
 }

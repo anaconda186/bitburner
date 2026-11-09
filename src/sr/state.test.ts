@@ -171,6 +171,17 @@ describe("conductor starts: reloads and installs", () => {
     expect(lostMs(next)).toBe(100_000);
   });
 
+  test("a start after the casino's own script reload records no reload loss (GLOSSARY: a script reload is no page reload)", () => {
+    const start = { atMs: T0 + 700_000, savedUpdatedAt: RUNNING.updatedAt, afterCasino: true };
+    expect(accountStart(RUNNING, start, FRESH)).toEqual(RUNNING);
+  });
+
+  test("an install is still counted when the casino's report is somehow there", () => {
+    const installed = { lastAugReset: T0 + 650_000, lastNodeReset: FRESH.lastNodeReset };
+    const start = { atMs: T0 + 660_000, savedUpdatedAt: RUNNING.updatedAt, afterCasino: true };
+    expect(accountStart(RUNNING, start, installed)).toEqual({ ...RUNNING, installs: 1, resetAt: installed.lastAugReset });
+  });
+
   test("a start after an install counts the install and records no reload", () => {
     const installed = { lastAugReset: T0 + 650_000, lastNodeReset: FRESH.lastNodeReset };
     const next = accountStart(RUNNING, { atMs: T0 + 660_000, savedUpdatedAt: RUNNING.updatedAt }, installed);

@@ -7,6 +7,7 @@
 // `probe` (that is dnet.probe, 0.2 GB, which is why a ProbeLaunch calls its
 // probe `name`). `npm run ram-check` prices the real thing.
 import { backoffMs } from "./backoff.ts";
+import { CASINO_CAP, CASINO_HOST_RAM_GB, capReached, readCasinoNews } from "./blackjack.ts";
 import type { Json, Reply, WorkerReport } from "./helper-contract.ts";
 import {
   CALLS, PROBES, WORKERS, type HelperScript, type ProbeName, type ProbeSpec, type ProbeValues, type WorkerName, type WorkerSpec,
@@ -14,7 +15,7 @@ import {
 import { nextDriverJob, readDriverNews, readDriverOrder, type City, type DriverOrder } from "./driver-jobs.ts";
 import { fleetWant } from "./fleet.ts";
 import { cloudServerCost, NEUTRAL_MULTS, type NodeMults } from "./formulas.ts";
-import { ORDERS_OFF, readOrders, SPLIT_OFF, type EngineOrders, type RamSplit } from "./money-engine.ts";
+import { ORDERS_OFF, readOrders, readOutlook, SPLIT_OFF, type EngineOrders, type RamSplit } from "./money-engine.ts";
 import { ramSplit, SPLIT_TUNABLES, type ResetPoint, type SplitTunables } from "./ram-split.ts";
 import { nodeMults } from "./node-mults.ts";
 
@@ -25,6 +26,11 @@ export type ProbeReading<T> = Reply<T> & { readonly atMs: number };
 export type Snapshot = {
   /** Wall-clock time the snapshot was taken (`Date.now()`). */
   readonly nowMs: number;
+  /**
+   * The run's category, from the state file (#56: the casino plays only in
+   * Open). Absent in fixtures that don't care, which reads as not Open.
+   */
+  readonly category?: string;
   /**
    * Free RAM right now (GB, max minus used) on every server a helper can be
    * launched on: home, plus every server the network probe found that we
@@ -88,16 +94,33 @@ export type WorkerControl = { readonly kind: "control"; readonly worker: WorkerN
 /** Something for the conductor to do. */
 export type Action = ProbeLaunch | HelperCall | WorkerStart | WorkerControl;
 
-/** An action before it has a server: what the sub-deciders produce. */
-export type Want = Omit<ProbeLaunch, "host"> | Omit<HelperCall, "host"> | Omit<WorkerStart, "host"> | WorkerControl;
+/**
+ * An action before it has a server: what the sub-deciders produce. A worker
+ * start may name its server (the casino on home), over WorkerSpec.host.
+ */
+export type Want =
+  | Omit<ProbeLaunch, "host">
+  | Omit<HelperCall, "host">
+  | (Omit<WorkerStart, "host"> & { readonly host?: string })
+  | WorkerControl;
 
 export function decide(snapshot: Snapshot): readonly Action[] {
-  const wants: Want[] = driverWants(snapshot);
+  // "Wait" (spec #41 story 53): while the casino plays, the conductor stays
+  // up and idle. Its one action is turning the money engine off (an empty
+  // port reads as off, so after the casino's reloads there is none).
+  if (casinoRunning(snapshot)) return place(snapshot, engineWants(snapshot));
+  const casino = casinoStage(snapshot);
+  const wants: Want[] = driverWants(snapshot, casino);
+  wants.push(...casinoWants(snapshot, casino));
   wants.push(...staleProbes(snapshot).map((name): Want => ({ kind: "probe", name })));
   const rooting = rootWant(snapshot);
   if (rooting !== undefined) wants.push(rooting);
-  const purchase = fleetWant(snapshot, engineOrders(snapshot), driverWanted(snapshot) ? [DRIVER_HOST] : []);
-  if (purchase !== undefined) wants.push(purchase);
+  // The fleet buys nothing while the casino is still to come: its server and
+  // stake come first (spec #41 BN1.1 plan: casino, then programs and fleet).
+  if (!casinoWanted(casino)) {
+    const purchase = fleetWant(snapshot, engineOrders(snapshot), driverWanted(snapshot) ? [DRIVER_HOST] : []);
+    if (purchase !== undefined) wants.push(purchase);
+  }
   wants.push(...engineWants(snapshot));
   if (traderWanted(snapshot) && startDue(snapshot.workers.trader, snapshot.nowMs)) {
     wants.push({ kind: "start", worker: "trader", arg: null });
@@ -134,15 +157,13 @@ function hostKnown(s: Snapshot, host: string): boolean | undefined {
  * money is there (the stats probe's reading), then the driver is started on
  * it, before anything else is placed, and handed its jobs one at a time.
  */
-function driverWants(s: Snapshot): Want[] {
+function driverWants(s: Snapshot, casino: CasinoStage): Want[] {
   if (!driverWanted(s)) return [];
   const exists = hostKnown(s, DRIVER_HOST);
   if (exists === undefined) return [];
   if (!exists) {
     const stats = s.probes.stats;
-    const last = s.lastCall;
-    const retrying = last?.script === BUY_SCRIPT && !last.reply.ok && s.nowMs - last.atMs < BUY_RETRY_MS;
-    if (stats?.ok !== true || stats.value.money < cloudServerCost(DRIVER_HOST_RAM_GB, NEUTRAL_MULTS) || retrying) return [];
+    if (stats?.ok !== true || stats.value.money < cloudServerCost(DRIVER_HOST_RAM_GB, NEUTRAL_MULTS) || buyRetrying(s)) return [];
     return [{ kind: "call", script: BUY_SCRIPT, arg: { host: DRIVER_HOST, ram: DRIVER_HOST_RAM_GB } }];
   }
   const driver = s.workers.driver;
@@ -156,17 +177,165 @@ function driverWants(s: Snapshot): Want[] {
   if (order !== undefined && order.seq > news.done) return [];
   const job = nextDriverJob(news, wantedCity(s));
   if (job === undefined) return [];
+  // While the casino is still to come, its server and stake come before the
+  // port openers after BruteSSH (spec #41 BN1.1 plan: TOR, BruteSSH, casino,
+  // then the programs).
+  if (casinoWanted(casino) && job.kind === "buy" && !job.programs.every((p) => p === "BruteSSH.exe")) return [];
   const message: DriverOrder = { seq: Math.max(order?.seq ?? 0, news.done) + 1, job };
   return [{ kind: "control", worker: "driver", message }];
 }
 
+/** A cloud server purchase failed under BUY_RETRY_MS ago: wait before the next. */
+function buyRetrying(s: Snapshot): boolean {
+  const last = s.lastCall;
+  return last?.script === BUY_SCRIPT && !last.reply.ok && s.nowMs - last.atMs < BUY_RETRY_MS;
+}
+
+/** The BitNode multipliers the run prices things with (the engine's orders carry the same). */
+function runMults(s: Snapshot): NodeMults {
+  const route = s.probes.route;
+  if (route?.ok !== true) return NEUTRAL_MULTS;
+  const reading = s.probes.bitnode;
+  return nodeMults(route.value, reading?.ok ? reading.value : undefined);
+}
+
 /**
  * Where the plan wants the player (the driver travels there), or null for
- * anywhere. Nothing in BN1.1 needs a city yet; the casino in Aevum (#56) and
- * the city factions (#59) fill this in.
+ * anywhere: Aevum while the casino is pending (#56). The city factions (#59)
+ * add theirs.
  */
-export function wantedCity(_s: Snapshot): City | null {
-  return null;
+export function wantedCity(s: Snapshot): City | null {
+  return casinoStage(s) === "pending" ? CASINO_CITY : null;
+}
+
+/** The casino is alive (its own pid, or the one in its report), whoever started it. */
+export function casinoRunning(s: Snapshot): boolean {
+  return s.workers.casino?.running === true;
+}
+
+/**
+ * The casino's tunables (spec #41 "Tunables": the casino skip threshold).
+ * Move them into the global table when one exists.
+ */
+export const CASINO_TUNABLES = {
+  /**
+   * How long the casino takes to the $10b cap, in seconds. The skip
+   * threshold follows from it (CASINO_CAP / durationS: $27.8m/s at 360 s).
+   * Measured by #55 (v3.0.1, headless Chromium, lab saves, from a few $m):
+   * 371 s (187 reloads), 352 s (110), 346 s (120) and 316 s (143); reloads
+   * dominate, about 1.7 s each from navigation to the first hand. The spec's
+   * model said 3.5 min ($48m/s). Real save sizes make reloads slower still.
+   */
+  durationS: 360,
+  /**
+   * Money to bet with, beyond the price of the casino's server: the host is
+   * bought only once this is left over, so the casino never starts broke
+   * (the engine is off while it plays). Modelled, not measured.
+   */
+  stakeMin: 100_000,
+} as const;
+
+export type CasinoTunables = { readonly [K in keyof typeof CASINO_TUNABLES]: number };
+
+/** Income at which the casino is skipped: what reaches its $10b as soon as it would. */
+export function casinoSkipThresholdPerSec(t: CasinoTunables = CASINO_TUNABLES): number {
+  return CASINO_CAP / t.durationS;
+}
+
+/** Home RAM from which the casino runs on home rather than its cloud server (spec #41 story 54). */
+export const CASINO_HOME_RAM_GB = 128;
+/** The casino's cloud server (WORKERS.casino.host), bought at CASINO_HOST_RAM_GB. */
+export const CASINO_HOST = WORKERS.casino.host;
+const CASINO_CITY: City = "Aevum";
+
+/**
+ * Where the casino stands this install:
+ *   - `running`: alive. decide waits.
+ *   - `off`: not played here: no route yet, not Open, BN8 or BN9 (their
+ *     plans decide), or outside BN1.1 with the player away from Aevum (only
+ *     BN1.1's driver travels so far; Singularity travel is a later ticket).
+ *   - `unknown`: played here, but nothing has said yet what it has paid
+ *     since the install (no report, no stats reading).
+ *   - `done`: the cap is reached since the install.
+ *   - `skipped`: the engine's modelled income beats it (the skip rule).
+ *   - `pending`: wanted and not running: travel, its host, then the start.
+ */
+export type CasinoStage = "running" | "off" | "unknown" | "done" | "skipped" | "pending";
+
+export function casinoStage(s: Snapshot, t: CasinoTunables = CASINO_TUNABLES): CasinoStage {
+  if (casinoRunning(s)) return "running";
+  const route = s.probes.route;
+  if (s.category !== "open" || route?.ok !== true) return "off";
+  if (route.value.currentNode === 8 || route.value.currentNode === 9) return "off";
+  if (!driverWanted(s) && playerFacts(s)?.city !== CASINO_CITY) return "off";
+  const news = readCasinoNews(s.workers.casino?.report?.value);
+  const stats = s.probes.stats;
+  const paid = [news?.winnings, stats?.ok === true ? stats.value.casinoWinnings : undefined].filter((w) => w !== undefined);
+  if (paid.length === 0) return "unknown";
+  if (news?.phase === "capped" || capReached(Math.max(...paid))) return "done";
+  return engineIncomePerSec(s) >= casinoSkipThresholdPerSec(t) ? "skipped" : "pending";
+}
+
+/** The casino is wanted this install: the rest of the run leaves its money and its room alone. */
+function casinoWanted(stage: CasinoStage): boolean {
+  return stage === "unknown" || stage === "pending" || stage === "running";
+}
+
+/** The engine's modelled income on its RAM now (its outlook), 0 while it has none. */
+function engineIncomePerSec(s: Snapshot): number {
+  const report = s.workers.engine?.report?.value;
+  const outlook = typeof report === "object" && report !== null ? readOutlook((report as { outlook?: unknown }).outlook) : undefined;
+  return outlook?.incomePerSec ?? 0;
+}
+
+/**
+ * The player's money and city: the driver's news when it is running (it
+ * reads them every second), else the stats probe's latest reading.
+ */
+function playerFacts(s: Snapshot): { readonly money: number; readonly city: string } | undefined {
+  const driver = s.workers.driver;
+  const news = driver?.running === true ? readDriverNews(driver.report?.value) : undefined;
+  if (news !== undefined) return news.facts;
+  const stats = s.probes.stats;
+  return stats?.ok === true ? stats.value : undefined;
+}
+
+/** Where the casino goes: home once home has CASINO_HOME_RAM_GB, else its cloud server. */
+export function casinoHost(s: Snapshot): string {
+  const stats = s.probes.stats;
+  return stats?.ok === true && stats.value.homeRam >= CASINO_HOME_RAM_GB ? "home" : CASINO_HOST;
+}
+
+/** The driver has an order in hand (BN1.1): the casino, which drives the page too, waits for it. */
+function driverBusy(s: Snapshot): boolean {
+  const driver = s.workers.driver;
+  const news = driver?.running === true ? readDriverNews(driver.report?.value) : undefined;
+  const order = readDriverOrder(s.controls.driver);
+  return news !== undefined && order !== undefined && order.seq > news.done;
+}
+
+/**
+ * The casino while it is pending (#56): its 64 GB cloud server bought once
+ * its price and a stake are in hand (unless it goes on home), then, with the
+ * player in Aevum and the driver idle, the casino started there with the
+ * run's category. A crashed or missing casino is started again with the
+ * worker backoff.
+ */
+function casinoWants(s: Snapshot, stage: CasinoStage): Want[] {
+  if (stage !== "pending") return [];
+  const host = casinoHost(s);
+  if (host !== "home") {
+    const exists = hostKnown(s, host);
+    if (exists === undefined) return [];
+    if (!exists) {
+      const money = playerFacts(s)?.money ?? 0;
+      const price = cloudServerCost(CASINO_HOST_RAM_GB, runMults(s)) + CASINO_TUNABLES.stakeMin;
+      if (money < price || buyRetrying(s)) return [];
+      return [{ kind: "call", script: BUY_SCRIPT, arg: { host, ram: CASINO_HOST_RAM_GB } }];
+    }
+  }
+  if (playerFacts(s)?.city !== CASINO_CITY || driverBusy(s) || !startDue(s.workers.casino, s.nowMs)) return [];
+  return [{ kind: "start", worker: "casino", arg: { category: "open" }, host }];
 }
 
 const ROOT_SCRIPT = CALLS.root as HelperScript;
@@ -190,28 +359,44 @@ function rootWant(s: Snapshot): Want | undefined {
 
 /**
  * RAM on home that the money engine leaves free, so probes and action helpers
- * still fit there: the dearest one that may run now.
+ * still fit there: the dearest one that may run now. Plus the casino's room
+ * while the casino is wanted on home (#56).
  */
 export function homeReserveGb(s: Snapshot): number {
   const scripts: HelperScript[] = Object.values(CALLS);
   for (const spec of Object.values(PROBES) as ProbeSpec[]) {
     if (spec.onlyIf === undefined || spec.onlyIf(s.probes)) scripts.push(spec.script);
   }
-  return Math.max(0, ...scripts.map((script) => s.helperRamGb[script] ?? 0));
+  const helpersGb = Math.max(0, ...scripts.map((script) => s.helperRamGb[script] ?? 0));
+  const casino = casinoRoom(s);
+  return helpersGb + (casino?.host === "home" ? casino.gb : 0);
+}
+
+/**
+ * The casino's room while it is wanted (#56): its host and RAM, which the
+ * engine never fills and the fleet never buys. A static reserve, like the
+ * driver's, so a casino that crashed finds its room still free.
+ */
+function casinoRoom(s: Snapshot): { readonly host: string; readonly gb: number } | undefined {
+  const gb = s.helperRamGb[WORKERS.casino.script] ?? 0;
+  return gb > 0 && casinoWanted(casinoStage(s)) ? { host: casinoHost(s), gb } : undefined;
 }
 
 /**
  * Where the run is in the reset, for the RAM split (#58): off until the route
- * probe has said where the run is, and off in BN8, where hacking earns no
- * money (its exp-only engine, story 104, is for the BN8 tickets to switch on:
- * the engine's jobs would take the trader's room); the exp start for `expStartMs` after the fleet is bought; otherwise saving
- * (all money). Hooks: #56 returns off while the casino runs, #59/#61/#65 the
- * `working` point with the faction's favor, #64 the final `climb`.
+ * probe has said where the run is, off in BN8, where hacking earns no money
+ * (its exp-only engine, story 104, is for the BN8 tickets to switch on: the
+ * engine's jobs would take the trader's room), and off while the casino runs
+ * (#56, story 53: its in-flight jobs still land); the exp start for
+ * `expStartMs` after the fleet is bought; otherwise saving (all money). Hooks:
+ * #59/#61/#65 the `working` point with the faction's favor, #64 the final
+ * `climb`.
  */
 export function resetPoint(s: Snapshot, t: SplitTunables = SPLIT_TUNABLES): ResetPoint {
   const route = s.probes.route;
   if (route?.ok !== true) return { kind: "off" };
   if (route.value.currentNode === 8) return { kind: "off" };
+  if (casinoRunning(s)) return { kind: "off" };
   if (s.fleetBoughtAtMs !== undefined && s.nowMs - s.fleetBoughtAtMs < t.expStartMs) return { kind: "expStart" };
   return { kind: "saving" };
 }
@@ -219,18 +404,21 @@ export function resetPoint(s: Snapshot, t: SplitTunables = SPLIT_TUNABLES): Rese
 /**
  * The engine's orders (spec #41 "RAM split kinds"): the split for the point
  * in the reset (`ramSplit`), the home reserve and the BitNode multipliers.
+ * Off while the casino runs (#56) whatever the split says.
  */
 export function engineOrders(s: Snapshot): EngineOrders {
   const route = s.probes.route;
   const split = ramSplit(resetPoint(s));
-  if (route?.ok !== true || sameSplit(split, SPLIT_OFF)) return ORDERS_OFF;
-  const reading = s.probes.bitnode;
-  const mults = nodeMults(route.value, reading?.ok ? reading.value : undefined);
-  const orders = { split, homeReserveGb: homeReserveGb(s), mults };
-  // The driver's room on its host stays free for it (a static reserve, so a
-  // driver that died finds its room still there when it is started again).
+  if (route?.ok !== true || casinoRunning(s) || sameSplit(split, SPLIT_OFF)) return ORDERS_OFF;
+  const orders = { split, homeReserveGb: homeReserveGb(s), mults: runMults(s) };
+  // The driver's and the casino's rooms on their cloud servers stay free for
+  // them (static reserves, so one that died finds its room still there).
+  const reserves: Record<string, number> = {};
   const driverGb = s.helperRamGb[WORKERS.driver.script] ?? 0;
-  return driverWanted(s) && driverGb > 0 ? { ...orders, hostReserveGb: { [DRIVER_HOST]: driverGb } } : orders;
+  if (driverWanted(s) && driverGb > 0) reserves[DRIVER_HOST] = driverGb;
+  const casino = casinoRoom(s);
+  if (casino !== undefined && casino.host !== "home") reserves[casino.host] = casino.gb;
+  return Object.keys(reserves).length > 0 ? { ...orders, hostReserveGb: reserves } : orders;
 }
 
 const sameMults = (a: NodeMults, b: NodeMults): boolean =>
@@ -320,9 +508,10 @@ export function place(snapshot: Snapshot, wants: readonly Want[]): Action[] {
     const cost = snapshot.helperRamGb[script] ?? 0;
     if (!(cost > 0)) continue;
     const spec: WorkerSpec | undefined = want.kind === "start" ? WORKERS[want.worker] : undefined;
+    const pinned = want.kind === "start" ? (want.host ?? spec?.host) : undefined;
     const host =
-      spec?.host !== undefined
-        ? (free[spec.host] ?? 0) + RAM_EPSILON >= cost ? spec.host : undefined
+      pinned !== undefined
+        ? (free[pinned] ?? 0) + RAM_EPSILON >= cost ? pinned : undefined
         : pickHost(free, cost, spec?.homeHeadroom === true ? homeReserveGb(snapshot) : 0);
     if (host === undefined) continue;
     free[host] = (free[host] ?? 0) - cost;

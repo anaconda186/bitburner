@@ -35,7 +35,7 @@ function snap(servers: Server[], over: Partial<Snapshot> & { money?: number; out
     probes: {
       network: reading({ hosts: ["home"] }),
       route: route(1),
-      stats: reading({ hack: 300, money: 1e12, M: 1, homeRam: 64 }),
+      stats: reading({ hack: 300, money: 1e12, M: 1, homeRam: 64, city: "Sector-12", casinoWinnings: 0 }),
       market: reading({ hasTixApi: false }),
       fleet: fleet(servers, money),
     },
